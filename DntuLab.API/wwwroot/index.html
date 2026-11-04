@@ -1,0 +1,1835 @@
+<!DOCTYPE html>
+
+<html lang="vi">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Hệ thống Quản lý phòng LAB Khoa CNTT - DNTU</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+
+    <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Be Vietnam Pro',system-ui,sans-serif;
+            background: #f6f4f3
+        }
+    </style>
+
+</head>
+
+<body>
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+
+const { useState, useEffect, useRef } = React;
+
+
+
+
+const useStoredState = (key, initialValue) => {
+  const [value, setValue] = useState(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved ? JSON.parse(saved) : initialValue;
+    } catch { return initialValue; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue];
+};
+
+/* ---------- Tiện ích ---------- */
+
+const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+
+const overlap = (a, b) => toMin(a.batDau) < toMin(b.ketThuc) && toMin(b.batDau) < toMin(a.ketThuc);
+
+const pad = (n) => String(n).padStart(2, "0");
+const parseUiDate = (value) => {
+  const parts = String(value || "").split("/").map(Number);
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return null;
+  return new Date(parts[2], parts[1] - 1, parts[0]);
+};
+const formatUiDate = (date) => `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+const startOfWeek = (date) => {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d;
+};
+const addDays = (date, days) => { const d = new Date(date); d.setDate(d.getDate() + days); return d; };
+const weekdayLabel = (date) => ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"][date.getDay()];
+
+const I = ({ n, c = "" }) => <i className={`fa-solid fa-${n} ${c}`}></i>;
+
+const TONE = {
+
+  green: "bg-green-100 text-green-800 border-green-300",
+
+  red: "bg-red-100 text-red-800 border-red-300",
+
+  yellow: "bg-amber-100 text-amber-800 border-amber-300",
+
+  blue: "bg-sky-100 text-sky-800 border-sky-300",
+
+  gray: "bg-stone-100 text-stone-700 border-stone-300",
+
+};
+
+const STATUS_TONE = {
+
+  "Chờ xử lý": "red", "Đang sửa chữa": "yellow", "Báo cáo cấp trên": "red", "Đã khắc phục": "green",
+
+  "Chờ duyệt": "yellow", "Tự động duyệt": "blue", "Đã duyệt": "green", "Từ chối": "red",
+
+  "Chưa check-in": "gray", "Đang diễn ra": "blue", "Đã kết thúc": "green",
+
+};
+
+const Badge = ({ text, tone }) => (
+
+  <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded-full border ${TONE[tone || STATUS_TONE[text] || "gray"]}`}>{text}</span>
+
+);
+
+const Card = ({ title, icon, right, children }) => (
+
+  <section className="bg-white rounded-lg border border-stone-200 shadow-sm mb-5">
+
+    <div className="flex items-center justify-between px-4 py-3 border-b border-stone-200">
+
+      <h3 className="font-semibold text-stone-800">{icon && <I n={icon} c="mr-2 text-[#8B0000]" />}{title}</h3>
+
+      <div>{right}</div>
+
+    </div>
+
+    <div className="p-4">{children}</div>
+
+  </section>
+
+);
+
+const Btn = ({ onClick, children, kind = "primary", disabled, small }) => {
+
+  const k = {
+
+    primary: "bg-[#8B0000] text-white hover:bg-[#6d0000]",
+
+    ghost: "bg-white text-stone-700 border border-stone-300 hover:bg-stone-100",
+
+    green: "bg-green-700 text-white hover:bg-green-800",
+
+    amber: "bg-amber-500 text-white hover:bg-amber-600",
+
+    danger: "bg-red-600 text-white hover:bg-red-700",
+
+  }[kind];
+
+  return (
+
+    <button onClick={onClick} disabled={disabled}
+
+      className={`${k} ${small ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm"} rounded-md font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#8B0000] disabled:opacity-40 disabled:cursor-not-allowed`}>
+
+      {children}
+
+    </button>
+
+  );
+
+};
+
+const Modal = ({ title, onClose, children }) => (
+
+  <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+
+    <div className="bg-white rounded-lg w-full max-w-lg shadow-xl">
+
+      <div className="flex items-center justify-between px-4 py-3 border-b">
+
+        <h3 className="font-semibold">{title}</h3>
+
+        <button onClick={onClose} className="text-stone-500 hover:text-stone-900" aria-label="Đóng"><I n="xmark" /></button>
+
+      </div>
+
+      <div className="p-4">{children}</div>
+
+    </div>
+
+  </div>
+
+);
+
+const Alert = ({ type, children }) => {
+
+  const t = { error: ["red", "circle-exclamation"], warn: ["yellow", "triangle-exclamation"], ok: ["green", "circle-check"], info: ["blue", "circle-info"] }[type];
+
+  return <div className={`border rounded-md px-3 py-2 text-sm ${TONE[t[0]]}`}><I n={t[1]} c="mr-2" />{children}</div>;
+
+};
+
+const Empty = ({ text }) => <p className="text-sm text-stone-500 py-4 text-center">{text}</p>;
+
+const inputCls = "w-full border border-stone-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#8B0000] disabled:bg-stone-100 disabled:text-stone-400 disabled:cursor-not-allowed";
+
+
+
+/* ---------- Dữ liệu khởi tạo ---------- */
+
+const genDevices = (maPhong, prefix, n, loai, ten) =>
+
+  Array.from({ length: n }, (_, i) => ({
+
+    maThietBi: `${prefix}${pad(i + 1)}`, maPhong, loai, ten: `${ten} ${pad(i + 1)}`, trangThai: "Sẵn sàng",
+
+  }));
+
+
+
+const INIT_PHONG = [
+  { maPhong: "F507", loaiPhong: "PC", sucChua: 50 },
+  { maPhong: "F508", loaiPhong: "PC", sucChua: 50 },
+  { maPhong: "F509", loaiPhong: "PC", sucChua: 50 },
+  ...Array.from({ length: 9 }, (_, i) => ({ maPhong: `G${201 + i}`, loaiPhong: "BYOD", sucChua: 60 })),
+  { maPhong: "AIBOT", loaiPhong: "Lab AI", sucChua: 80 },
+];
+
+const INIT_THIETBI = [
+  ...["F507", "F508", "F509"].flatMap((p) => genDevices(p, `${p}-PC`, 50, "PC", "Máy tính")),
+  ...Array.from({ length: 9 }, (_, i) => {
+    const p = `G${201 + i}`;
+    return [
+      { maThietBi: `${p}-TV01`, maPhong: p, loai: "TV", ten: "Màn hình Tivi trình chiếu", trangThai: "Sẵn sàng" },
+      { maThietBi: `${p}-WIFI`, maPhong: p, loai: "WIFI", ten: "Hệ thống mạng không dây", trangThai: "Sẵn sàng" },
+      { maThietBi: `${p}-TUSAC01`, maPhong: p, loai: "TUSAC", ten: "Tủ sạc laptop", trangThai: "Sẵn sàng" },
+    ];
+  }).flat(),
+  ...genDevices("AIBOT", "AI-KIT", 6, "KIT", "Bộ Kit Robot & mô hình STEM"),
+];
+
+const INIT_LICH = [
+  // Lich mau ban dau; sau khi dang nhap se duoc bo sung day du tu 20/10 den 30/11.
+  { maLich: "L1", ngay: "12/10/2026", ca: "Ca 1", batDau: "07:00", ketThuc: "09:00", monHoc: "Lập trình Web API", maPhong: "F507", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L2", ngay: "12/10/2026", ca: "Ca 2", batDau: "09:30", ketThuc: "11:30", monHoc: "Cơ sở dữ liệu", maPhong: "G201", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L3", ngay: "12/10/2026", ca: "Ca 3", batDau: "13:00", ketThuc: "15:00", monHoc: "An toàn thông tin", maPhong: "F509", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L4", ngay: "12/10/2026", ca: "Ca 4", batDau: "15:30", ketThuc: "17:30", monHoc: "Trí tuệ nhân tạo và Robotics", maPhong: "AIBOT", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  // Lich mau cu, khong phai lich chinh trong giai doan cap nhat.
+  { maLich: "L5", ngay: "15/10/2026", ca: "Ca 1", batDau: "07:00", ketThuc: "09:00", monHoc: "Phát triển ứng dụng di động", maPhong: "F508", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L6", ngay: "15/10/2026", ca: "Ca 2", batDau: "09:30", ketThuc: "11:30", monHoc: "Mạng máy tính", maPhong: "G202", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L7", ngay: "15/10/2026", ca: "Ca 3", batDau: "13:00", ketThuc: "15:00", monHoc: "Học máy ứng dụng", maPhong: "F509", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L8", ngay: "15/10/2026", ca: "Ca 4", batDau: "15:30", ketThuc: "17:30", monHoc: "Cơ sở dữ liệu nâng cao", maPhong: "F508", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  // Lich mau cu, du lieu lich day day du duoc tao boi taoLichDemoDenCuoiThang11().
+  { maLich: "L9", ngay: "18/10/2026", ca: "Ca 1", batDau: "07:00", ketThuc: "09:00", monHoc: "Lập trình Web API", maPhong: "G203", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+];
+
+const INIT_NHATKY = [];
+const INIT_TICKET = [];
+const INIT_YEUCAU = [
+  { maYeuCau: "YC001", maLich: "L1", monHoc: "Lập trình Web API", gv: "Trần Xuân Hoàng", phongCu: "F507", phongMoi: "F508", lyDo: "Cần thêm chỗ ngồi cho lớp ghép", loai: "Có kế hoạch", trangThai: "Chờ duyệt", thoiGian: "Hôm qua 16:40" },
+];
+
+const IMPORT_ROWS = [
+  { maLich: "L10", ngay: "18/10/2026", ca: "Ca 2", batDau: "09:30", ketThuc: "11:30", monHoc: "Cơ sở dữ liệu", maPhong: "G201", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L11", ngay: "18/10/2026", ca: "Ca 3", batDau: "13:00", ketThuc: "15:00", monHoc: "An toàn thông tin", maPhong: "F507", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+  { maLich: "L12", ngay: "18/10/2026", ca: "Ca 4", batDau: "15:30", ketThuc: "17:30", monHoc: "Phát triển ứng dụng di động", maPhong: "AIBOT", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
+];
+
+const ACTORS = {
+
+  gv: { label: "Giảng viên", ten: "Nguyễn Định Khiêm", icon: "chalkboard-user" },
+
+  ktv: { label: "Kỹ thuật viên", ten: "Phạm Hải Quân", icon: "screwdriver-wrench" },
+
+  ql: { label: "Quản lý LAB", ten: "Nguyễn Thị Liệu", icon: "user-tie" },
+
+};
+
+const TIMES = [
+
+  { t: "07:05", note: "Đúng giờ Ca 1" },
+
+  { t: "07:25", note: "Trễ > 15 phút" },
+
+  { t: "08:30", note: "Giờ hành chính" },
+
+];
+
+const LOI = ["Hỏng chuột/bàn phím", "Không lên màn hình", "Mất mạng", "Lỗi Kit Robot"];
+
+const DEV_ICON = { PC: "desktop", TV: "tv", WIFI: "wifi", TUSAC: "charging-station", KIT: "robot" };
+
+
+
+/* ---------- Sơ đồ thiết bị ---------- */
+
+function DeviceGrid({ devices, onPick }) {
+
+  const style = {
+
+    "Sẵn sàng": "bg-green-100 border-green-500 text-green-900",
+
+    "Hỏng": "bg-red-100 border-red-600 text-red-900",
+
+    "Đang bảo trì": "bg-amber-100 border-amber-500 text-amber-900",
+
+  };
+
+  if (!devices.length) return <Empty text="Phòng này chưa khai báo thiết bị." />;
+
+  return (
+
+    <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-2">
+
+      {devices.map((d) => (
+
+        <button key={d.maThietBi} onClick={() => onPick && onPick(d)} title={`${d.ten} - ${d.trangThai}`}
+
+          className={`relative border-2 rounded-md p-2 text-center transition ${style[d.trangThai]} ${onPick ? "hover:shadow-md cursor-pointer" : "cursor-default"}`}>
+
+          {d.trangThai === "Hỏng" && <I n="flag" c="absolute top-1 right-1 text-xs text-red-700" />}
+
+          {d.trangThai === "Đang bảo trì" && <I n="wrench" c="absolute top-1 right-1 text-xs text-amber-700" />}
+
+          <I n={DEV_ICON[d.loai]} c="text-xl" />
+
+          <div className="text-[11px] font-bold mt-1">{d.maThietBi.split("-").pop()}</div>
+
+          <div className="text-[10px] leading-tight">{d.trangThai}</div>
+
+        </button>
+
+      ))}
+
+    </div>
+
+  );
+
+}
+
+const Legend = () => (
+
+  <div className="flex flex-wrap gap-3 text-xs text-stone-600 mb-3">
+
+    <span><span className="inline-block w-3 h-3 bg-green-400 rounded-sm mr-1"></span>Sẵn sàng</span>
+
+    <span><span className="inline-block w-3 h-3 bg-red-500 rounded-sm mr-1"></span>Hỏng (gắn cờ)</span>
+
+    <span><span className="inline-block w-3 h-3 bg-amber-400 rounded-sm mr-1"></span>Đang bảo trì</span>
+
+  </div>
+
+);
+
+
+
+/* ---------- Giảng viên ---------- */
+
+function TeacherView(S) {
+
+  const { dsPhong, dsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, setDsThietBi, dsYeuCau, setDsYeuCau, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, gv, currentUser, notify } = S;
+
+  const [tab, setTab] = useState(1);
+  const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(new Date()));
+
+  const [loaiLoc, setLoaiLoc] = useState("PC");
+
+  const [qrLich, setQrLich] = useState(null);
+
+  const [qrResult, setQrResult] = useState(null);
+  const [qrScannerError, setQrScannerError] = useState("");
+  const qrVideoRef = useRef(null);
+
+  const [coLich, setCoLich] = useState(null);
+
+  const [tick, setTick] = useState({ dien: false, khoa: false });
+
+  const [mode, setMode] = useState("kehoach");
+
+  const [f, setF] = useState({ maLich: "", phongMoi: "", lyDo: "" });
+
+  const [phongXem, setPhongXem] = useState("F507");
+
+  const [tbChon, setTbChon] = useState(null);
+
+  const [loi, setLoi] = useState(LOI[0]);
+
+  const [ghiChu, setGhiChu] = useState("");
+  const [moTaSuCo, setMoTaSuCo] = useState("");
+
+
+
+  // Loại bỏ lịch bị lặp chính xác (cùng ngày, giờ, phòng, giảng viên và môn học).
+  // Không gộp các ca khác ngày hoặc khác giờ.
+  const uniqueLich = Array.from(new Map(dsLich.map((l) => {
+    // Ưu tiên ID CSDL; không dùng mã lịch có thể trùng giữa các nguồn dữ liệu.
+    const key = l.id != null ? `id:${l.id}` : `ma:${l.maLich}|${l.ngay}|${l.batDau}|${l.ketThuc}|${l.giangVienId ?? l.gv ?? ""}`;
+    return [key, l];
+  })).values());
+  const tenTaiKhoanGV = String(currentUser?.tenDangNhap || "").toLowerCase() === "gv01"
+    ? "Trần Xuân Hoàng"
+    : String(currentUser?.tenDangNhap || "").toLowerCase() === "gv02"
+      ? "Nguyễn Định Khiêm" : "";
+  // Mỗi tài khoản giảng viên chỉ xem/thao tác trên lịch thuộc chính mình.
+  const myLich = currentUser?.vaiTro === "GV"
+    ? uniqueLich.filter(l => (currentUser?.id != null && l.giangVienId != null && String(l.giangVienId) === String(currentUser.id))
+      || (tenTaiKhoanGV && String(l.gv || "").trim() === tenTaiKhoanGV))
+    : uniqueLich;
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i));
+  const weekStartText = formatUiDate(weekDays[0]);
+  const weekEndText = formatUiDate(weekDays[6]);
+  const weekLich = myLich.filter((l) => {
+    const date = parseUiDate(l.ngay);
+    return date && date >= weekDays[0] && date < addDays(weekDays[6], 1);
+  });
+  const caTheoBuoi = [
+    { ten: "Sáng", gio: "07:00 – 11:30", test: (l) => toMin(l.batDau) < 12 * 60 },
+    { ten: "Chiều", gio: "12:00 – 17:30", test: (l) => toMin(l.batDau) >= 12 * 60 && toMin(l.batDau) < 18 * 60 },
+    { ten: "Tối", gio: "18:00 trở đi", test: (l) => toMin(l.batDau) >= 18 * 60 },
+  ];
+
+  const dangBan = (maPhong) => dsLich.some((l) => l.maPhong === maPhong && l.trangThai !== "Đã kết thúc" && toMin(l.batDau) <= toMin(systemTime) && toMin(systemTime) < toMin(l.ketThuc));
+
+  const xungDot = (lich, maPhong) => dsLich.some((x) => x.maLich !== lich.maLich && x.maPhong === maPhong && x.ngay === lich.ngay && x.trangThai !== "Đã kết thúc" && overlap(x, lich));
+
+  const nk = (maLich) => dsNhatKy.find((n) => n.maLich === maLich);
+
+  const canCheckIn = (l) => l.trangThai === "Chưa check-in" && toMin(systemTime) >= toMin(l.batDau) - 15 && toMin(systemTime) < toMin(l.ketThuc);
+
+  // Mô phỏng quét QR: không mở camera và không đọc QR thật.
+  // Người dùng bấm nút xác nhận trong hộp thoại để mô phỏng quét đúng mã phòng.
+
+
+  const wrongRoom = (l) => dsPhong.find((p) => p.maPhong !== l.maPhong && (l.maPhong.startsWith("F") ? p.maPhong.startsWith("G") : l.maPhong.startsWith("G") ? p.maPhong.startsWith("F") : p.maPhong.startsWith("F")))?.maPhong || l.maPhong;
+
+
+
+  const doCheckIn = (l, dung) => {
+
+    if (!canCheckIn(l)) { setQrResult({ type: "warn", msg: `Đã quét mã QR nhưng chưa thể check-in. Chỉ được check-in từ 15 phút trước giờ bắt đầu đến trước giờ kết thúc ca (${l.batDau}–${l.ketThuc}). Giờ hệ thống: ${systemTime}.` }); return; }
+
+    if (!dung) { setQrResult({ type: "error", msg: "Mã phòng không khớp với lịch giảng dạy hiện tại của Thầy/Cô!" }); return; }
+
+    const tre = toMin(systemTime) - toMin(l.batDau);
+
+    const muon = tre > 15;
+
+    setDsLich((p) => p.map((x) => (cungMotLich(x, l) ? { ...x, trangThai: "Đang diễn ra" } : x)));
+
+    setDsNhatKy((p) => [...p.filter((n) => (n.lichDayId != null && l.id != null ? String(n.lichDayId) !== String(l.id) : !(String(n.maLich) === String(l.maLich) && String(n.tenDangNhapGV || "").toLowerCase() === taiKhoanCuaLich(l)))), { tenDangNhapGV: taiKhoanCuaLich(l), maNhatKy: "NK" + pad(p.length + 1).padStart(3, "0"), maLich: l.maLich, gv, checkIn: systemTime, checkInMuon: muon, checkOut: null }]);
+
+    setQrResult(muon
+
+      ? { type: "warn", msg: `Check-in thành công lúc ${systemTime} nhưng MUỘN ${tre} phút so với giờ vào ca ${l.batDau}. Hệ thống đã ghi nhận cờ checkInMuon = true.` }
+
+      : { type: "ok", msg: `Check-in đúng giờ lúc ${systemTime}. Ca học chuyển sang "Đang diễn ra" (checkInMuon = false).` });
+
+    // Sau khi check-in, mở ngay sơ đồ và Ticket của đúng phòng vừa nhận.
+    setPhongXem(l.maPhong);
+    setTab(3);
+    setQrLich(null);
+    notify(muon ? "Check-in muộn đã được ghi nhận. Đang hiển thị thiết bị và Ticket của phòng " + l.maPhong + "." : "Check-in thành công. Đang hiển thị thiết bị và Ticket của phòng " + l.maPhong + ".", muon ? "warn" : "ok");
+
+  };
+
+  const doCheckOut = () => {
+
+    const l = coLich;
+
+    setDsLich((p) => p.map((x) => (cungMotLich(x, l) ? { ...x, trangThai: "Đã kết thúc" } : x)));
+
+    setDsNhatKy((p) => p.map((n) => ((n.lichDayId != null && l.id != null ? String(n.lichDayId) === String(l.id) : String(n.maLich) === String(l.maLich) && String(n.tenDangNhapGV || "").toLowerCase() === taiKhoanCuaLich(l)) ? { ...n, checkOut: systemTime } : n)));
+
+    setCoLich(null); setTick({ dien: false, khoa: false });
+    setTab(1);
+
+    notify(`Đã check-out ca ${l.ca} lúc ${systemTime}. Sơ đồ phòng đã đóng.`, "ok");
+
+  };
+
+
+
+  const submitPlanned = async () => {
+    const l = dsLich.find((x) => x.maLich === f.maLich);
+    if (!l || l.id == null || l.trangThai === "Đã kết thúc" || !laPhongFG(l.maPhong)) { notify("Lịch không hợp lệ hoặc không thuộc cụm F/G.", "error"); return; }
+    if (!f.phongMoi || !f.lyDo.trim()) { notify("Vui lòng chọn phòng mới và nhập lý do.", "error"); return; }
+    if (!phongHopLeFG(l.maPhong, f.phongMoi) || xungDot(l, f.phongMoi)) { notify("Phòng mới không hợp lệ hoặc bị trùng lịch.", "error"); return; }
+    try {
+      await apiFetch("/api/YeuCauDoiPhong", { method: "POST", body: JSON.stringify({ lichDayId: Number(l.id), phongMoi: f.phongMoi, lyDo: f.lyDo.trim() }) }, S.token);
+      const res = await apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token).catch(() => null);
+      if (res) setDsYeuCau(unwrapData(res).map(x => ({ id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, maLich:l.maLich, lichDayId:x.lichDayId, monHoc:l.monHoc, gv:x.tenGiangVien || gv, phongCu:x.phongCu, phongMoi:x.phongMoi, lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao })));
+      setF({ maLich: "", phongMoi: "", lyDo: "" });
+      notify("Đã lưu yêu cầu đổi phòng vào database.", "ok");
+    } catch (e) { notify(e.message, "error"); }
+  };
+
+  const submitUrgent = async () => {
+    const l = dsLich.find((x) => x.maLich === f.maLich);
+    if (systemTime >= "08:00") { notify("Đổi phòng khẩn cấp chỉ áp dụng trước 08:00.", "error"); return; }
+    if (!l || l.id == null || l.trangThai !== "Đang diễn ra") { notify("Chỉ đổi phòng cho ca đang diễn ra đã check-in.", "error"); return; }
+    if (!f.phongMoi || !f.lyDo.trim() || !phongHopLeFG(l.maPhong, f.phongMoi) || xungDot(l, f.phongMoi)) { notify("Phòng mới không hợp lệ hoặc bị trùng lịch.", "error"); return; }
+    try {
+      await apiFetch("/api/DoiPhongKhanCap", { method: "POST", body: JSON.stringify({ lichDayId: Number(l.id), phongMoi: f.phongMoi, lyDo: f.lyDo.trim() }) }, S.token);
+      setDsLich(prev => prev.map(x => String(x.id) === String(l.id) ? { ...x, maPhong:f.phongMoi } : x));
+      setF({ maLich: "", phongMoi: "", lyDo: "" });
+      notify(`Đã cập nhật đổi phòng ${l.maPhong} → ${f.phongMoi} trên database.`, "ok");
+    } catch (e) { notify(e.message, "error"); }
+  };
+
+  const submitTicket = async () => {
+    const d = tbChon;
+    if (!moTaSuCo.trim()) { notify("Vui lòng mô tả sự cố trước khi gửi.", "error"); return; }
+    const lich = dsLich.find(l => l.maPhong === d.maPhong && l.trangThai === "Đang diễn ra" && l.id != null)
+      || dsLich.find(l => l.maPhong === d.maPhong && l.gv === gv && l.trangThai !== "Đã kết thúc" && l.id != null);
+    try {
+      if (d.maPhong.startsWith("F")) {
+        if (!lich) throw new Error("Không tìm thấy lịch database phù hợp để ghi nhận tạm.");
+        await apiFetch("/api/GhiNhanTam", { method:"POST", body:JSON.stringify({ lichDayId:Number(lich.id), maThietBi:d.maThietBi, moTa:moTaSuCo.trim() }) }, S.token);
+        const records = await apiFetch(`/api/GhiNhanTam/theo-lich/${lich.id}`, {}, S.token);
+        setDsGhiNhanTam(prev => [...prev.filter(x => String(x.lichDayId) !== String(lich.id)), ...unwrapData(records).map(x => ({ id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId, maLich:lich.maLich, maPhong:d.maPhong, maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa, nguoiGhi:gv, thoiGian:x.thoiGian, trangThai:x.trangThai }))]);
+        notify("Đã lưu ghi nhận tạm vào database.", "ok");
+      } else {
+        await apiFetch("/api/Ticket", { method:"POST", body:JSON.stringify({ maThietBi:d.maThietBi, loaiLoi:loi || "Sự cố thiết bị", ghiChu:moTaSuCo.trim() }) }, S.token);
+        notify("Đã tạo Ticket chính thức trong database.", "ok");
+      }
+      setTbChon(null); setGhiChu(""); setMoTaSuCo(""); setLoi(LOI[0]);
+    } catch (e) { notify(e.message, "error"); }
+  };
+
+  const guiTicketTongHop = async (g) => {
+    try {
+      if (g.id == null) throw new Error("Ghi nhận tạm chưa có ID database. Hãy tải lại dữ liệu.");
+      await apiFetch(`/api/GhiNhanTam/${g.id}/tong-hop`, { method:"POST" }, S.token);
+      const res = await apiFetch(`/api/GhiNhanTam/theo-lich/${g.lichDayId}`, {}, S.token);
+      setDsGhiNhanTam(prev => [...prev.filter(x => String(x.lichDayId) !== String(g.lichDayId)), ...unwrapData(res).map(x => ({ id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId, maLich:g.maLich, maPhong:g.maPhong, maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa, nguoiGhi:g.nguoiGhi, thoiGian:x.thoiGian, trangThai:x.trangThai }))]);
+      notify(`Đã tổng hợp ${g.maGhiNhan} thành Ticket trong database.`, "ok");
+    } catch (e) { notify(e.message, "error"); }
+  };
+
+  const pickDevice = (d) => {
+
+    if (d.trangThai !== "Sẵn sàng") { notify(`${d.maThietBi} đang ở trạng thái "${d.trangThai}", đã có ticket xử lý.`, "warn"); return; }
+
+    setTbChon(d);
+
+  };
+
+
+
+  const selLich = dsLich.find((x) => x.maLich === f.maLich);
+
+  // Cho phép đổi sang phòng F/G khác cùng cụm hoặc khác cụm; không áp dụng AIBOT.
+  const laPhongFG = (maPhong) => maPhong.startsWith("F") || maPhong.startsWith("G");
+  const phongHopLeFG = (phongNguon, phongDich) =>
+    laPhongFG(phongNguon) && laPhongFG(phongDich) && phongNguon !== phongDich;
+  // Đề xuất phòng F/G khác phòng hiện tại, đủ sức chứa và không xung đột lịch.
+  // Dữ liệu báo cáo chưa có sĩ số từng lớp/thiết bị bắt buộc từng môn, nên demo dùng sức chứa phòng hiện tại làm ngưỡng tham chiếu.
+  const phongDuDieuKien = (lich) => {
+    if (!lich || !laPhongFG(lich.maPhong)) return [];
+    const phongNguon = dsPhong.find((p) => p.maPhong === lich.maPhong);
+    return dsPhong.filter((p) => phongHopLeFG(lich.maPhong, p.maPhong)
+      && p.sucChua >= (phongNguon?.sucChua || 0)
+      && !xungDot(lich, p.maPhong));
+  };
+  const phongUrgent = phongDuDieuKien(selLich);
+  const phongPlanned = phongDuDieuKien(selLich);
+
+  // Có kế hoạch: chọn ca F/G chưa kết thúc, kể cả chưa check-in.
+  // Khẩn cấp: chỉ chọn ca F/G đang diễn ra sau khi check-in.
+  const caChon = myLich.filter((l) => laPhongFG(l.maPhong) && (mode === "khancap" ? l.trangThai === "Đang diễn ra" : l.trangThai !== "Đã kết thúc"));
+
+  // Sơ đồ chỉ khả dụng khi đã check-in thành công và có ca đang diễn ra. Không lọc theo tên giảng viên; trạng thái ca là căn cứ hiển thị phòng.
+  const lichDangSuDung = dsLich.find((l) => l.trangThai === "Đang diễn ra") || null;
+  const coPhongDangSuDung = Boolean(lichDangSuDung?.maPhong);
+  const tabs = [[1, "calendar-check", "Lịch dạy & Check-in (UC01-03)"], [2, "right-left", "Đổi phòng (UC04-05)"], [3, "table-cells", "Sơ đồ phòng & Ticket (UC06)"]];
+
+
+
+  return (
+
+    <div>
+
+      <div className="flex flex-wrap gap-2 mb-5">
+
+        {tabs.map(([k, ic, t]) => (
+
+          <button key={k} disabled={k === 3 && !coPhongDangSuDung} onClick={() => { if (k === 3 && !coPhongDangSuDung) return; setTab(k); setF({ maLich: "", phongMoi: "", lyDo: "" }); }}
+
+            title={k === 3 && !coPhongDangSuDung ? "Chỉ mở sơ đồ sau khi check-in thành công" : undefined}
+            className={`px-4 py-2 rounded-md text-sm font-medium border ${tab === k ? "bg-[#8B0000] text-white border-[#8B0000]" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-100"} ${k === 3 && !coPhongDangSuDung ? "opacity-50 cursor-not-allowed" : ""}`}>
+
+            <I n={ic} c="mr-2" />{t}
+
+          </button>
+
+        ))}
+
+      </div>
+
+
+
+      {tab === 1 && (
+
+        <div>
+
+          <Card title={`Lịch học theo tuần của ${gv}`} icon="calendar-week"
+            right={<div className="flex flex-wrap items-center gap-2">
+              <Btn kind="ghost" small onClick={() => setWeekAnchor((d) => addDays(d, -7))}><I n="chevron-left" c="mr-1" />Tuần trước</Btn>
+              <Btn kind="ghost" small onClick={() => setWeekAnchor(startOfWeek(new Date()))}>Tuần hiện tại</Btn>
+              <Btn kind="ghost" small onClick={() => setWeekAnchor((d) => addDays(d, 7))}>Tuần sau<I n="chevron-right" c="ml-1" /></Btn>
+            </div>}>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div className="font-semibold text-stone-700">{weekStartText} – {weekEndText}</div>
+              <div className="text-xs text-stone-500">{weekLich.length} ca học trong tuần</div>
+            </div>
+            {!myLich.length && <Empty text="Chưa có ca dạy nào." />}
+            {myLich.length > 0 && !weekLich.length && <Empty text="Tuần này chưa có ca học. Hãy chuyển sang tuần trước hoặc tuần sau." />}
+            <div className="overflow-x-auto border border-stone-200 rounded-lg">
+              <div className="min-w-[1050px]">
+                <div className="grid grid-cols-[84px_repeat(7,minmax(130px,1fr))] bg-stone-50 border-b border-stone-200">
+                  <div className="p-2 text-xs font-bold text-stone-600 border-r border-stone-200 flex items-center">Buổi</div>
+                  {weekDays.map((day) => {
+                    const count = weekLich.filter((l) => l.ngay === formatUiDate(day)).length;
+                    const isToday = formatUiDate(day) === formatUiDate(new Date());
+                    return <div key={formatUiDate(day)} className={`p-2 text-center border-r last:border-r-0 border-stone-200 ${isToday ? "bg-red-50" : ""}`}>
+                      <div className={`text-xs font-bold ${isToday ? "text-[#8B0000]" : "text-sky-700"}`}>{weekdayLabel(day)}</div>
+                      <div className="text-sm font-semibold text-stone-800">{formatUiDate(day)}</div>
+                      <div className="text-[11px] text-stone-500">{count} ca</div>
+                    </div>;
+                  })}
+                </div>
+                {caTheoBuoi.map((buoi) => <div key={buoi.ten} className="grid grid-cols-[84px_repeat(7,minmax(130px,1fr))] border-b last:border-b-0 border-stone-200 min-h-[150px]">
+                  <div className="p-2 bg-amber-50 border-r border-stone-200 flex flex-col justify-center items-center text-center">
+                    <span className="font-semibold text-sm text-stone-700">{buoi.ten}</span>
+                    <span className="text-[10px] text-stone-500 mt-1">{buoi.gio}</span>
+                  </div>
+                  {weekDays.map((day) => {
+                    const dateText = formatUiDate(day);
+                    const lessons = weekLich.filter((l) => l.ngay === dateText && buoi.test(l)).sort((a,b) => toMin(a.batDau)-toMin(b.batDau));
+                    return <div key={`${dateText}-${buoi.ten}`} className="p-1.5 border-r last:border-r-0 border-stone-200 bg-white min-w-0 space-y-2">
+                      {!lessons.length && <div className="h-full min-h-[110px] rounded bg-stone-50/70"></div>}
+                      {lessons.map((l) => {
+                        const log = nk(l.maLich);
+                        return <div key={l.maLich} className={`rounded-md border p-2 text-xs ${l.maPhong === "AIBOT" ? "bg-violet-50 border-violet-300" : l.maPhong.startsWith("F") ? "bg-sky-50 border-sky-300" : "bg-green-50 border-green-300"}`}>
+                          <div className="font-bold text-stone-800">{l.ca} · {l.batDau}–{l.ketThuc}</div>
+                          <div className="font-semibold mt-1 break-words">{l.monHoc}</div>
+                          <div className="mt-1">Phòng <b>{l.maPhong}</b></div>
+                          <div className="mt-1"><Badge text={l.trangThai} /></div>
+                          {log && <div className="text-[10px] text-stone-600 mt-1">Check-in: {log.checkIn}{log.checkInMuon ? " (muộn)" : ""}{log.checkOut ? ` · Ra: ${log.checkOut}` : ""}</div>}
+                          <div className="mt-2 flex flex-col gap-1">
+                            {l.trangThai === "Chưa check-in" && <Btn small onClick={() => { setQrLich(l); setQrResult(null); }}><I n="qrcode" c="mr-1" />Check-in</Btn>}
+                            {l.trangThai === "Đang diễn ra" && <Btn small kind="amber" onClick={() => setCoLich(l)}><I n="right-from-bracket" c="mr-1" />Check-out</Btn>}
+                          </div>
+                        </div>;
+                      })}
+                    </div>;
+                  })}
+                </div>)}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs text-stone-600 mt-3">
+              <span><span className="inline-block w-3 h-3 rounded-sm bg-sky-200 border border-sky-300 mr-1"></span>Cụm F</span>
+              <span><span className="inline-block w-3 h-3 rounded-sm bg-green-200 border border-green-300 mr-1"></span>Cụm G</span>
+              <span><span className="inline-block w-3 h-3 rounded-sm bg-violet-200 border border-violet-300 mr-1"></span>Lab AI / AIBOT</span>
+            </div>
+            <p className="text-xs text-stone-500 mt-3">Nút Check-in chỉ mở từ 15 phút trước giờ vào ca đến khi hết ca. Dùng thanh giờ hệ thống phía trên để thử các tình huống.</p>
+          </Card>
+
+
+
+          <Card title="Tra cứu phòng trống theo loại phòng (UC01)" icon="magnifying-glass">
+
+            <div className="flex gap-2 mb-3">
+
+              {["PC", "BYOD", "Lab AI"].map((t) => (
+
+                <button key={t} onClick={() => setLoaiLoc(t)} className={`px-3 py-1.5 rounded-full text-sm border ${loaiLoc === t ? "bg-stone-800 text-white border-stone-800" : "bg-white border-stone-300"}`}>{t}</button>
+
+              ))}
+
+            </div>
+
+            <div className="grid sm:grid-cols-3 gap-3">
+
+              {dsPhong.filter((p) => p.loaiPhong === loaiLoc).map((p) => {
+
+                const ban = dangBan(p.maPhong);
+                const sucChuaHienThi = Number(p.sucChua) || 0;
+
+                return (
+
+                  <div key={p.maPhong} className="border border-stone-200 rounded-md p-3">
+
+                    <div className="flex justify-between items-center"><b>{p.maPhong}</b><Badge text={ban ? "Đang sử dụng" : "Trống"} tone={ban ? "red" : "green"} /></div>
+
+                    <div className="text-sm text-stone-600 mt-1">Sức chứa {sucChuaHienThi} · Lúc {systemTime}</div>
+
+                  </div>
+
+                );
+
+              })}
+
+            </div>
+
+          </Card>
+
+        </div>
+
+      )}
+
+
+
+      {tab === 2 && (
+
+        <Card title="Đổi phòng trực tuyến" icon="right-left">
+
+          <div className="flex gap-2 mb-4">
+
+            <Btn kind={mode === "kehoach" ? "primary" : "ghost"} onClick={() => { setMode("kehoach"); setF({ maLich: "", phongMoi: "", lyDo: "" }); }}>Đổi phòng có kế hoạch (UC04)</Btn>
+
+            <Btn kind={mode === "khancap" ? "danger" : "ghost"} onClick={() => { setMode("khancap"); setF({ maLich: "", phongMoi: "", lyDo: "" }); }}>Đổi phòng khẩn cấp trước 8h00 (UC05)</Btn>
+
+          </div>
+
+
+
+          {mode === "khancap" && systemTime >= "08:00" ? (
+
+            <Alert type="error">Đã qua mốc 08:00. Hệ thống không tự động duyệt đổi phòng khẩn cấp; vui lòng liên hệ Quản lý LAB hoặc gửi yêu cầu theo quy trình có kế hoạch.</Alert>
+
+          ) : (
+
+            <div className="grid md:grid-cols-2 gap-4 max-w-3xl">
+
+              <div>
+
+                <label className="text-sm font-medium">Ca dạy cần đổi</label>
+
+                <select className={inputCls} value={f.maLich} onChange={(e) => setF({ ...f, maLich: e.target.value, phongMoi: "" })} disabled={!caChon.length}>
+
+                  <option value="">{mode === "khancap" ? "-- Chọn ca đã check-in --" : "-- Chọn ca cần đề xuất đổi phòng --"}</option>
+
+                  {caChon.map((l) => <option key={l.maLich} value={l.maLich}>{l.ca} {l.batDau}-{l.ketThuc} · {l.monHoc} · {l.maPhong}</option>)}
+
+                </select>
+
+              </div>
+
+              <div>
+
+                <label className="text-sm font-medium">{mode === "khancap" ? "Phòng F/G khác đang trống cùng khung giờ" : "Phòng đề xuất khả dụng"}</label>
+
+                <select className={inputCls} value={f.phongMoi} onChange={(e) => setF({ ...f, phongMoi: e.target.value })} disabled={!selLich}>
+
+                  <option value="">-- Chọn phòng mới --</option>
+
+                  {(mode === "khancap" ? phongUrgent : phongPlanned).map((p) => <option key={p.maPhong} value={p.maPhong}>{p.maPhong} ({p.loaiPhong}, {p.sucChua} chỗ)</option>)}
+
+                </select>
+
+                {selLich && !(mode === "khancap" ? phongUrgent : phongPlanned).length && <p className="text-xs text-red-600 mt-1">Không có phòng F/G khác phòng hiện tại, đủ sức chứa và không trùng lịch trong khung giờ này.</p>}
+                {selLich && <p className="text-xs text-stone-500 mt-1">Danh sách đã loại phòng hiện tại, phòng trùng lịch và phòng có sức chứa thấp hơn phòng hiện tại. Kiểm tra thiết bị chuyên biệt cần thực hiện theo yêu cầu môn học.</p>}
+
+              </div>
+
+              {!caChon.length && <div className="md:col-span-2"><Alert type="warn">{mode === "khancap" ? "Chưa có ca F/G đang diễn ra đã check-in. Đổi phòng khẩn cấp chỉ áp dụng cho ca đang diễn ra." : "Không có ca F/G chưa kết thúc để gửi yêu cầu đổi phòng có kế hoạch."}</Alert></div>}
+
+              <div className="md:col-span-2">
+
+                <label className="text-sm font-medium">Lý do</label>
+
+                <textarea className={inputCls} rows={3} value={f.lyDo} onChange={(e) => setF({ ...f, lyDo: e.target.value })} disabled={!selLich} placeholder={mode === "khancap" ? "VD: Phòng mất điện đột xuất" : "VD: Cần phòng rộng hơn cho lớp ghép"} />
+
+              </div>
+
+              {selLich && !laPhongFG(selLich.maPhong) && <div className="md:col-span-2"><Alert type="warn">Đổi phòng chỉ áp dụng giữa các phòng F/G; có thể đổi trong cùng cụm hoặc giữa hai cụm. Phòng AIBOT không thuộc quy trình đổi phòng này.</Alert></div>}
+              {mode === "kehoach" && selLich && selLich.trangThai === "Chưa check-in" && <div className="md:col-span-2"><Alert type="info">Có thể gửi đề xuất trước khi check-in. Yêu cầu sẽ ở trạng thái Chờ duyệt; lịch chỉ được cập nhật sau khi Quản lý LAB phê duyệt.</Alert></div>}
+              <div className="md:col-span-2">
+
+                {mode === "khancap"
+
+                  ? <Btn kind="danger" disabled={!selLich || selLich.trangThai !== "Đang diễn ra"} onClick={submitUrgent}><I n="bolt" c="mr-1" />Xác nhận đổi phòng khẩn cấp (tự động duyệt)</Btn>
+
+                  : <Btn disabled={!selLich || selLich.trangThai === "Đã kết thúc" || !laPhongFG(selLich.maPhong)} onClick={submitPlanned}><I n="paper-plane" c="mr-1" />Gửi yêu cầu cho Quản lý LAB</Btn>}
+
+              </div>
+
+            </div>
+
+          )}
+
+
+
+          <h4 className="font-semibold mt-6 mb-2 text-sm">Yêu cầu đổi phòng của bạn</h4>
+
+          <table className="w-full text-sm">
+
+            <thead><tr className="text-left text-stone-500 border-b"><th className="py-2">Mã</th><th>Môn</th><th>Phòng</th><th>Loại</th><th>Trạng thái</th></tr></thead>
+
+            <tbody>
+
+              {dsYeuCau.filter((r) => r.gv === gv).map((r) => (
+
+                <tr key={r.maYeuCau} className="border-b"><td className="py-2">{r.maYeuCau}</td><td>{r.monHoc}</td><td>{r.phongCu} → {r.phongMoi}</td><td>{r.loai}</td><td><Badge text={r.trangThai} /></td></tr>
+
+              ))}
+
+            </tbody>
+
+          </table>
+
+          {!dsYeuCau.some((r) => r.gv === gv) && <Empty text="Bạn chưa gửi yêu cầu đổi phòng nào." />}
+
+        </Card>
+
+      )}
+
+
+
+      {tab === 3 && coPhongDangSuDung && (
+        <div>
+        <Card title="Sơ đồ thiết bị & báo sự cố" icon="table-cells"
+
+          right={<span className="inline-flex items-center gap-2 rounded-md border border-stone-300 bg-stone-50 px-3 py-1.5 text-sm font-semibold text-stone-700"><I n="location-dot" /> Phòng đang sử dụng: {dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || "Chưa check-in"}</span>}>
+
+          <Legend />
+
+          {(() => {
+            const lichDangSuDung = dsLich.find((l) => l.trangThai === "Đang diễn ra");
+            const maPhongHienTai = lichDangSuDung?.maPhong || phongXem;
+            const thongTinPhong = dsPhong.find((p) => p.maPhong === maPhongHienTai) || INIT_PHONG.find((p) => p.maPhong === maPhongHienTai);
+            const soMayTinh = dsThietBi.filter((d) => d.maPhong === maPhongHienTai && d.loai === "PC").length;
+            const sucChua = Number(thongTinPhong?.sucChua) || 0;
+            return <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-4">
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3"><div className="text-xs text-blue-700">Phòng đang sử dụng</div><div className="text-xl font-bold text-blue-950">{maPhongHienTai}</div><div className="text-xs text-blue-700 mt-1">{maPhongHienTai.startsWith("F") ? "Phòng thực hành máy tính" : maPhongHienTai.startsWith("G") ? "Phòng học lý thuyết" : "Phòng Lab AI / Robotics"}</div></div>
+              <div className="rounded-lg border border-stone-200 bg-white p-3"><div className="text-xs text-stone-500">Sức chứa tối đa</div><div className="text-xl font-bold text-stone-900">{sucChua} người</div><div className="text-xs text-stone-500 mt-1">Theo cấu hình phòng LAB</div></div>
+              <div className="rounded-lg border border-stone-200 bg-white p-3"><div className="text-xs text-stone-500">Thiết bị trong sơ đồ</div><div className="text-xl font-bold text-stone-900">{dsThietBi.filter((d) => d.maPhong === maPhongHienTai).length} thiết bị</div><div className="text-xs text-stone-500 mt-1">{maPhongHienTai.startsWith("F") ? `Máy tính: ${soMayTinh}/50` : maPhongHienTai.startsWith("G") ? "TV, Wi-Fi và thiết bị hỗ trợ" : "Bộ Kit Robot và mô hình STEM"}</div></div>
+            </div>;
+          })()}
+
+          <DeviceGrid devices={dsThietBi.filter((d) => d.maPhong === (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem))} onPick={pickDevice} />
+          <p className="text-xs text-stone-500 mt-3">{(dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem).startsWith("F") ? "Cụm F: chọn máy lỗi để ghi nhận tạm trong giờ học; cuối ca mới tổng hợp thành Ticket." : (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem).startsWith("G") ? "Cụm G: chọn thiết bị trong danh mục, mô tả sự cố và gửi Ticket chính thức." : "AIBOT: chọn thiết bị trong danh mục, mô tả sự cố và gửi Ticket chính thức."}</p>
+        </Card>
+        <Card title={`Ticket của phòng ${dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem}`} icon="ticket">
+          {dsTicket.filter((t) => t.maPhong === (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem)).length === 0
+            ? <Empty text={`Phòng ${dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem} hiện chưa có Ticket chính thức.`} />
+            : <div className="space-y-2">{dsTicket.filter((t) => t.maPhong === (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem)).map((t) => (
+                <div key={t.maTicket} className="border rounded-md p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2"><b>{t.maTicket} · {t.maThietBi}</b><Badge text={t.trangThai} /></div>
+                  <p className="text-sm mt-1">{t.ghiChu || t.loiLoai}</p>
+                  <p className="text-xs text-stone-500 mt-1">Người báo: {t.nguoiBao} · {t.thoiGianTao}</p>
+                </div>
+              ))}</div>}
+        </Card>
+        {(dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem).startsWith("F") && (
+          <Card title="Ghi nhận sự cố tạm theo ca – Cụm F" icon="clipboard-list">
+            <p className="text-sm text-stone-600 mb-3">Ghi nhận được lưu theo ca học trên hệ thống; chỉ chuyển cho kỹ thuật viên sau khi giảng viên tổng hợp và gửi Ticket.</p>
+            {!dsGhiNhanTam.filter((g) => g.maPhong === (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem)).length && <Empty text="Chưa có ghi nhận tạm nào." />}
+            <div className="space-y-2">
+              {dsGhiNhanTam.filter((g) => g.maPhong === (dsLich.find((l) => l.trangThai === "Đang diễn ra")?.maPhong || phongXem)).map((g) => (
+                <div key={g.maGhiNhan} className="border rounded-md p-3 flex flex-wrap justify-between gap-2">
+                  <div><b>{g.maGhiNhan} · {g.maThietBi}</b> <Badge text={g.trangThai} />
+                    <div className="text-sm">{g.moTa}</div><div className="text-xs text-stone-500">Ca: {g.maLich} · Người ghi: {g.nguoiGhi} · {g.thoiGian}</div>
+                  </div>
+                  {g.trangThai === "Chưa tổng hợp" && <Btn small onClick={() => guiTicketTongHop(g)}><I n="paper-plane" c="mr-1" />Tổng hợp & gửi Ticket</Btn>}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+        </div>
+      )}
+
+      {qrLich && (
+        <Modal title="Mô phỏng quét mã QR Check-in" onClose={() => setQrLich(null)}>
+          <p className="text-sm text-stone-600 mb-3">Ca {qrLich.ca} · {qrLich.monHoc} · Phòng {qrLich.maPhong} · Giờ hệ thống {systemTime}</p>
+          {!qrResult ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-stone-200 bg-white p-5 flex flex-col items-center">
+                <div className="text-sm font-semibold text-stone-800 mb-3">Mã QR phòng {qrLich.maPhong}</div>
+                <svg viewBox="0 0 210 210" role="img" aria-label={`Mã QR mô phỏng phòng ${qrLich.maPhong}`} className="w-52 h-52 max-w-full border-8 border-white">
+                  <rect width="210" height="210" fill="white"/>
+                  <defs><pattern id="mockQrPattern" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#111827"/><rect x="10" y="10" width="10" height="10" fill="#111827"/></pattern></defs>
+                  <rect x="50" y="10" width="150" height="150" fill="url(#mockQrPattern)"/>
+                  <rect x="10" y="50" width="150" height="150" fill="url(#mockQrPattern)"/>
+                  <rect x="10" y="10" width="60" height="60" fill="white"/><rect x="10" y="10" width="50" height="50" fill="#111827"/><rect x="20" y="20" width="30" height="30" fill="white"/><rect x="28" y="28" width="14" height="14" fill="#111827"/>
+                  <rect x="140" y="10" width="60" height="60" fill="white"/><rect x="150" y="20" width="40" height="40" fill="#111827"/><rect x="160" y="30" width="20" height="20" fill="white"/>
+                  <rect x="10" y="140" width="60" height="60" fill="white"/><rect x="20" y="150" width="40" height="40" fill="#111827"/><rect x="30" y="160" width="20" height="20" fill="white"/>
+                  <rect x="85" y="85" width="35" height="35" fill="white"/><rect x="90" y="90" width="25" height="25" fill="#111827"/><rect x="97" y="97" width="11" height="11" fill="white"/>
+                </svg>
+                <span className="mt-3 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">Đây là mã QR minh họa — không sử dụng camera</span>
+              </div>
+              <p className="text-sm text-stone-600">Trong bản mô phỏng, nhấn nút bên dưới để giả lập người dùng đã quét đúng mã QR tại phòng {qrLich.maPhong}. Hệ thống sẽ cập nhật trạng thái check-in trên giao diện.</p>
+              {!canCheckIn(qrLich) && <Alert type="warn">Đang ngoài khung giờ check-in hợp lệ. Để ghi nhận thành công, hãy chỉnh giờ hệ thống trong thanh kiểm thử về khoảng từ 15 phút trước giờ bắt đầu đến trước giờ kết thúc ca.</Alert>}
+              <div className="flex flex-wrap justify-end gap-2">
+                <Btn kind="ghost" onClick={() => setQrLich(null)}>Hủy</Btn>
+                <Btn onClick={() => doCheckIn(qrLich, true)}><I n="qrcode" c="mr-1" />Mô phỏng quét thành công</Btn>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <Alert type={qrResult.type}>{qrResult.msg}</Alert>
+              <div className="flex justify-end"><Btn onClick={() => setQrLich(null)}>Đóng</Btn></div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+
+
+      {coLich && (
+
+        <Modal title="Check-out kết thúc ca" onClose={() => setCoLich(null)}>
+
+          <Alert type="warn">Nhắc nhở: trước khi rời phòng {coLich.maPhong}, vui lòng tắt điện, máy lạnh và khóa cửa.</Alert>
+
+          <div className="my-3 space-y-2 text-sm">
+
+            <label className="flex items-center gap-2"><input type="checkbox" checked={tick.dien} onChange={(e) => setTick({ ...tick, dien: e.target.checked })} />Tôi đã tắt điện, máy tính và máy lạnh</label>
+
+            <label className="flex items-center gap-2"><input type="checkbox" checked={tick.khoa} onChange={(e) => setTick({ ...tick, khoa: e.target.checked })} />Tôi đã khóa cửa phòng</label>
+
+          </div>
+
+          <Btn kind="amber" disabled={!(tick.dien && tick.khoa)} onClick={doCheckOut}>Xác nhận check-out lúc {systemTime}</Btn>
+
+        </Modal>
+
+      )}
+
+
+
+      {tbChon && (
+
+        <Modal title={`Báo lỗi thiết bị ${tbChon.maThietBi}`} onClose={() => setTbChon(null)}>
+
+          <p className="text-sm text-stone-600 mb-3">{tbChon.ten} · Phòng {tbChon.maPhong}</p>
+
+          <label className="block text-sm font-medium mb-1">Mô tả sự cố thực tế</label>
+          <textarea className={inputCls} rows={4} placeholder="Nhập hiện tượng quan sát được, ví dụ: thiết bị không khởi động..." value={moTaSuCo} onChange={(e) => setMoTaSuCo(e.target.value)} />
+          <p className="text-xs text-stone-500 mt-2">{tbChon.maPhong.startsWith("F") ? "Thao tác này chỉ tạo ghi nhận tạm theo ca học, chưa tạo Ticket chính thức." : "Ticket sẽ được tạo chính thức; hệ thống gắn cờ báo lỗi cho thiết bị."}</p>
+          <div className="mt-3"><Btn onClick={submitTicket}><I n={tbChon.maPhong.startsWith("F") ? "clipboard-list" : "flag"} c="mr-1" />{tbChon.maPhong.startsWith("F") ? "Lưu ghi nhận tạm" : "Gửi Ticket chính thức"}</Btn></div>
+
+        </Modal>
+
+      )}
+
+    </div>
+
+  );
+
+}
+
+
+
+/* ---------- Kỹ thuật viên ---------- */
+
+function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, notify, token }) {
+  const [thietBiDangChon, setThietBiDangChon] = useState(null);
+  const capNhatTrangThaiThietBi = (device, trangThai) => {
+    setDsThietBi(prev => prev.map(d => d.maThietBi === device.maThietBi ? { ...d, trangThai } : d));
+    setThietBiDangChon(null);
+    notify(`Kỹ thuật viên đã cập nhật ${device.maThietBi} thành "${trangThai}".`, "ok");
+  };
+  const capNhatTrangThai = async (ticket, trangThai) => {
+    try {
+      if (ticket.id == null) throw new Error("Ticket chưa có ID database.");
+      await apiFetch(`/api/Ticket/${ticket.id}/trang-thai`, { method:"PUT", body:JSON.stringify({ trangThai }) }, token);
+      setDsTicket((p) => p.map((x) => x.maTicket === ticket.maTicket
+        ? { ...x, trangThai, thoiGianCapNhat: systemTime, ...(trangThai === "Đã khắc phục" ? { thoiGianHoanTat: systemTime } : {}) }
+        : x));
+    } catch (e) { notify(e.message, "error"); return; }
+    if (trangThai === "Đang sửa chữa" || trangThai === "Báo cáo cấp trên") {
+      setDsThietBi((p) => p.map((d) => d.maThietBi === ticket.maThietBi ? { ...d, trangThai: "Đang bảo trì" } : d));
+    }
+    if (trangThai === "Đã khắc phục") {
+      setDsThietBi((p) => p.map((d) => d.maThietBi === ticket.maThietBi ? { ...d, trangThai: "Sẵn sàng" } : d));
+    }
+    notify(
+      trangThai === "Đã khắc phục"
+        ? `Đã xác nhận khắc phục ${ticket.maThietBi}; Ticket được đóng và cờ lỗi đã gỡ.`
+        : trangThai === "Báo cáo cấp trên"
+          ? `Đã ghi nhận báo cáo cấp trên cho ${ticket.maTicket}.`
+          : `Đã cập nhật ${ticket.maTicket} sang "${trangThai}".`,
+      "ok"
+    );
+  };
+
+  const columns = [
+    { title: "Chờ tiếp nhận", statuses: ["Chờ xử lý"], tone: "red" },
+    { title: "Đang xử lý / Báo cáo cấp trên", statuses: ["Đang sửa chữa", "Báo cáo cấp trên"], tone: "yellow" },
+    { title: "Đã khắc phục / Đóng Ticket", statuses: ["Đã khắc phục"], tone: "green" },
+  ];
+
+  return (
+    <div>
+      <Card title="Bảng Kanban xử lý Ticket sự cố (UC07–UC09)" icon="ticket">
+        <p className="text-sm text-stone-600 mb-4">Kỹ thuật viên tiếp nhận Ticket, xử lý khi phòng không có tiết học nếu sự cố nhẹ; sự cố nghiêm trọng hoặc vượt thẩm quyền được ghi nhận để báo cáo cấp trên. Sau khi khắc phục, kỹ thuật viên xác nhận hoàn tất để đóng Ticket và gỡ cờ lỗi thiết bị.</p>
+        <div className="grid lg:grid-cols-3 gap-4">
+          {columns.map((col) => {
+            const items = dsTicket.filter((t) => col.statuses.includes(t.trangThai));
+            return (
+              <section key={col.title} className="rounded-lg border border-stone-200 bg-stone-50 p-3 min-w-0">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-sm">{col.title}</h4>
+                  <Badge text={String(items.length)} tone={col.tone} />
+                </div>
+                <div className="space-y-3">
+                  {!items.length && <Empty text="Không có Ticket." />}
+                  {items.map((t) => (
+                    <div key={t.maTicket} className="bg-white border border-stone-200 rounded-md p-3 shadow-sm">
+                      <div className="font-semibold text-sm">{t.maTicket} · {t.maThietBi}</div>
+                      <div className="text-xs text-stone-500 mt-1">{t.maPhong} · Người báo: {t.nguoiBao} · {t.thoiGianTao}</div>
+                      <p className="text-sm mt-2 break-words">{t.ghiChu || t.loiLoai}</p>
+                      <div className="mt-2"><Badge text={t.trangThai} /></div>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {t.trangThai === "Chờ xử lý" && <>
+                          <Btn small kind="amber" onClick={() => capNhatTrangThai(t, "Đang sửa chữa")}>Tiếp nhận / Bắt đầu</Btn>
+                          <Btn small kind="ghost" onClick={() => capNhatTrangThai(t, "Báo cáo cấp trên")}>Báo cáo cấp trên</Btn>
+                        </>}
+                        {t.trangThai === "Đang sửa chữa" && <>
+                          <Btn small kind="ghost" onClick={() => capNhatTrangThai(t, "Báo cáo cấp trên")}>Báo cáo cấp trên</Btn>
+                          <Btn small kind="green" onClick={() => capNhatTrangThai(t, "Đã khắc phục")}>Xác nhận khắc phục</Btn>
+                        </>}
+                        {t.trangThai === "Báo cáo cấp trên" && <>
+                          <Btn small kind="amber" onClick={() => capNhatTrangThai(t, "Đang sửa chữa")}>Tiếp tục xử lý</Btn>
+                          <Btn small kind="green" onClick={() => capNhatTrangThai(t, "Đã khắc phục")}>Xác nhận khắc phục</Btn>
+                        </>}
+                        {t.trangThai === "Đã khắc phục" && <p className="text-xs text-green-700">Đóng lúc: {t.thoiGianHoanTat || t.thoiGianCapNhat || "Đã hoàn tất"}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      </Card>
+      <Card title="Danh mục toàn bộ thiết bị các phòng LAB" icon="table-cells">
+        <p className="text-sm text-stone-600 mb-3">Kỹ thuật viên có thể bấm vào bất kỳ thiết bị nào (kể cả thiết bị đang Hỏng hoặc Đang bảo trì) để cập nhật trạng thái. Giảng viên chỉ được ghi nhận sự cố với thiết bị đang Sẵn sàng.</p>
+        <Legend />
+        {[
+          { ten: "Cụm phòng F", phong: [...new Set(dsThietBi.filter((d) => /^F\d+/.test(d.maPhong)).map((d) => d.maPhong))].sort() },
+          { ten: "Cụm phòng G", phong: [...new Set(dsThietBi.filter((d) => /^G\d+/.test(d.maPhong)).map((d) => d.maPhong))].sort() },
+          { ten: "Trung tâm AIBOT", phong: [...new Set(dsThietBi.filter((d) => d.maPhong === "AIBOT").map((d) => d.maPhong))] },
+        ].map((cum) => (
+          <div key={cum.ten} className="mb-6">
+            <h4 className="font-semibold text-base mb-3">{cum.ten}</h4>
+            {!cum.phong.length && <Empty text="Chưa có phòng hoặc thiết bị được khai báo trong cụm này." />}
+            {cum.phong.map((p) => (
+              <div key={p} className="mb-4 rounded-md border border-stone-200 p-3">
+                <h5 className="font-semibold text-sm mb-3">Phòng {p} · {dsThietBi.filter((d) => d.maPhong === p).length} thiết bị</h5>
+                <DeviceGrid devices={dsThietBi.filter((d) => d.maPhong === p)} onPick={setThietBiDangChon} />
+              </div>
+            ))}
+          </div>
+        ))}
+      </Card>
+      {thietBiDangChon && <Modal title={`Quản lý thiết bị ${thietBiDangChon.maThietBi}`} onClose={() => setThietBiDangChon(null)}>
+        <p className="text-sm text-stone-600 mb-2">{thietBiDangChon.ten} · Phòng {thietBiDangChon.maPhong}</p>
+        <p className="text-sm mb-4">Trạng thái hiện tại: <Badge text={thietBiDangChon.trangThai} /></p>
+        <p className="text-sm font-medium mb-2">Kỹ thuật viên có thể cập nhật trạng thái thiết bị:</p>
+        <div className="flex flex-wrap gap-2">
+          <Btn kind="green" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Sẵn sàng")}>Đánh dấu sẵn sàng</Btn>
+          <Btn kind="danger" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Hỏng")}>Đánh dấu hỏng</Btn>
+          <Btn kind="amber" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Đang bảo trì")}>Đang bảo trì</Btn>
+        </div>
+      </Modal>}
+    </div>
+  );
+}
+
+/* ---------- Quản lý LAB ---------- */
+
+function ManagerView(S) {
+
+  const { dsPhong, dsLich, setDsLich, dsNhatKy, dsTicket, dsYeuCau, setDsYeuCau, dsThongBao, notify } = S;
+
+  const [tab, setTab] = useState(1);
+
+  const [preview, setPreview] = useState(null);
+
+  const [daImport, setDaImport] = useState(false);
+
+  const [ketQua, setKetQua] = useState({});
+
+
+
+  /* Hàm thống kê (UC14) */
+
+  const thongKeSoCaSuDung = () => dsLich.filter((l) => l.trangThai === "Đang diễn ra" || l.trangThai === "Đã kết thúc").length;
+
+  const tinhTyLePhongTrong = () => {
+
+    const tongCa = dsPhong.length * 6 * 4;
+
+    const daDat = dsLich.reduce((s, l) => s + l.soBuoi, 0);
+
+    return Math.max(0, Math.round((1 - daDat / tongCa) * 1000) / 10);
+
+  };
+
+  const tinhThoiGianXuLyTrungBinh = () => {
+    const xong = dsTicket.filter((t) => t.thoiGianHoanTat && t.thoiGianTao);
+    const phutXuLy = xong.map((t) => Math.max(0, toMin(t.thoiGianHoanTat) - toMin(t.thoiGianTao)));
+    return phutXuLy.length ? Math.round(phutXuLy.reduce((s, n) => s + n, 0) / phutXuLy.length) : 0;
+  };
+
+
+
+  const kiemTra = (r) => {
+
+    const l = dsLich.find((x) => x.maLich === r.maLich);
+
+    const dung = dsLich.filter((x) => x.maLich !== l.maLich && x.maPhong === r.phongMoi && x.ngay === l.ngay && x.trangThai !== "Đã kết thúc" && overlap(x, l));
+
+    setKetQua((p) => ({ ...p, [r.maYeuCau]: dung.length ? { ok: false, msg: `Xung đột với ${dung.map((x) => `${x.monHoc} (${x.batDau}-${x.ketThuc})`).join(", ")} tại ${r.phongMoi}.` } : { ok: true, msg: `Không xung đột: ${r.phongMoi} trống trong khung ${l.batDau}-${l.ketThuc}.` } }));
+
+  };
+
+  const duyet = async (r) => {
+
+    const l = dsLich.find((x) => x.maLich === r.maLich);
+
+    const dung = dsLich.some((x) => x.maLich !== l.maLich && x.maPhong === r.phongMoi && x.ngay === l.ngay && x.trangThai !== "Đã kết thúc" && overlap(x, l));
+
+    if (dung) { notify(`Không thể phê duyệt: ${r.phongMoi} đang xung đột lịch. Hãy từ chối hoặc xử lý lịch trùng.`, "error"); kiemTra(r); return; }
+
+    try {
+      if (r.id == null) throw new Error("Yêu cầu thiếu ID database.");
+      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/phe-duyet`, { method:"POST", body:JSON.stringify({ ghiChuDuyet:"" }) }, S.token);
+      setDsLich((p) => p.map((x) => (x.maLich === r.maLich ? { ...x, maPhong: r.phongMoi } : x)));
+      setDsYeuCau((p) => p.map((x) => (x.maYeuCau === r.maYeuCau ? { ...x, trangThai: "Đã duyệt" } : x)));
+      notify(`Đã phê duyệt ${r.maYeuCau} trên database.`, "ok");
+    } catch (e) { notify(e.message, "error"); }
+
+  };
+
+  const tuChoi = async (r) => {
+
+    try {
+      if (r.id == null) throw new Error("Yêu cầu thiếu ID database.");
+      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/tu-choi`, { method:"POST", body:JSON.stringify({ ghiChuDuyet:"Từ chối qua giao diện quản lý" }) }, S.token);
+      setDsYeuCau((p) => p.map((x) => (x.maYeuCau === r.maYeuCau ? { ...x, trangThai: "Từ chối" } : x)));
+      notify(`Đã từ chối ${r.maYeuCau} trên database.`, "warn");
+    } catch (e) { notify(e.message, "error"); }
+
+  };
+
+
+
+  const perRoom = dsPhong.map((p) => ({ ma: p.maPhong, v: dsLich.filter((l) => l.maPhong === p.maPhong).length }));
+
+  const maxRoom = Math.max(1, ...perRoom.map((x) => x.v));
+
+  const tkTicket = ["Chờ xử lý", "Đang sửa chữa", "Báo cáo cấp trên", "Đã khắc phục"].map((s) => ({ ma: s, v: dsTicket.filter((t) => t.trangThai === s).length }));
+
+  const maxTk = Math.max(1, ...tkTicket.map((x) => x.v));
+
+  const tabs = [[1, "file-excel", "Import lịch & Giám sát (UC10, UC13)"], [2, "clipboard-check", "Duyệt đổi phòng & Hậu kiểm (UC11-12)"], [3, "chart-column", "Báo cáo hiệu suất (UC14)"]];
+
+  const planned = dsYeuCau.filter((r) => r.loai === "Có kế hoạch");
+
+  const urgent = dsYeuCau.filter((r) => r.loai === "Khẩn cấp");
+
+
+
+  return (
+
+    <div>
+
+      <div className="flex flex-wrap gap-2 mb-5">
+
+        {tabs.map(([k, ic, t]) => (
+
+          <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-md text-sm font-medium border ${tab === k ? "bg-[#8B0000] text-white border-[#8B0000]" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-100"}`}><I n={ic} c="mr-2" />{t}</button>
+
+        ))}
+
+      </div>
+
+
+
+      {tab === 1 && (
+
+        <div>
+
+          <Card title="Import lịch học từ Excel (UC10)" icon="file-excel">
+
+            <p className="text-sm text-stone-600 mb-3">Bản giả lập chỉ cập nhật lịch cho hai tài khoản GV01 và GV02; không tạo lịch cho tài khoản giảng viên khác.</p>
+            <Btn kind="ghost" disabled={daImport} onClick={() => setPreview(IMPORT_ROWS.filter(r => ["gv01", "gv02"].includes(String(r.tenDangNhapGV || "").toLowerCase())))}><I n="cloud-arrow-down" c="mr-1" />Giả lập tải file Excel từ Phòng Đào tạo/Khảo thí</Btn>
+
+            {daImport && <p className="text-sm text-green-700 mt-2">Đã import lịch cho hai tài khoản GV01 và GV02.</p>}
+
+            {preview && !daImport && (
+
+              <div className="mt-4">
+
+                <table className="w-full text-sm mb-3">
+
+                  <thead><tr className="text-left text-stone-500 border-b"><th className="py-2">Ca</th><th>Giờ</th><th>Môn học</th><th>Phòng</th><th>Giảng viên</th></tr></thead>
+
+                  <tbody>{preview.map((r) => <tr key={r.maLich} className="border-b"><td className="py-2">{r.ca}</td><td>{r.batDau}-{r.ketThuc}</td><td>{r.monHoc}</td><td>{r.maPhong}</td><td className="font-semibold">{String(r.tenDangNhapGV || "").toUpperCase()}</td></tr>)}</tbody>
+
+                </table>
+
+                <Btn onClick={() => { const rowsChiGV01GV02 = preview.filter(r => ["gv01", "gv02"].includes(String(r.tenDangNhapGV || "").toLowerCase())); setDsLich((p) => [...p.filter(x => !rowsChiGV01GV02.some(r => String(x.maLich) === String(r.maLich))), ...rowsChiGV01GV02]); setDaImport(true); setPreview(null); notify(`Import thành công ${rowsChiGV01GV02.length} dòng lịch cho GV01/GV02.`, "ok"); }}>Xác nhận Import</Btn>
+
+              </div>
+
+            )}
+
+          </Card>
+
+          <Card title="Giám sát nhật ký ca học (UC13)" icon="eye">
+
+            <div className="mb-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {[{ username: "gv01", label: "GV01" }, { username: "gv02", label: "GV02" }].map(g => {
+                const owned = dsLich.filter(l => taiKhoanCuaLich(l) === g.username);
+                const subjects = new Set(owned.map(l => String(l.monHoc || "").trim()).filter(Boolean));
+                const soTiet = owned.reduce((sum, l) => sum + Math.max(0, Number(l.soTiet ?? l.soTietDay ?? 2) || 0), 0);
+                const theoNgay = owned.reduce((acc, l) => { const ngay = String(l.ngay || "Chưa rõ ngày"); acc[ngay] = (acc[ngay] || 0) + 1; return acc; }, {});
+                const soNgay = Object.keys(theoNgay).length;
+                const ngayDuCa = Object.values(theoNgay).filter(n => n >= 2).length;
+                const chiTietNgay = Object.entries(theoNgay).sort(([a],[b]) => {
+                  const parse = v => { const m = String(v).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? new Date(Number(m[3]), Number(m[2])-1, Number(m[1])).getTime() : 0; };
+                  return parse(a) - parse(b);
+                });
+                return <div key={g.username} className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-3">
+                  <div className="font-semibold text-base">{g.label}</div>
+                  <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div><div className="text-xs text-stone-500">Môn học</div><div className="text-lg font-bold">{subjects.size}</div></div>
+                    <div><div className="text-xs text-stone-500">Tổng ca dạy</div><div className="text-lg font-bold">{owned.length}</div></div>
+                    <div><div className="text-xs text-stone-500">Tổng tiết dạy</div><div className="text-lg font-bold">{soTiet}</div></div>
+                    <div><div className="text-xs text-stone-500">Ngày có ≥ 2 ca</div><div className="text-lg font-bold">{ngayDuCa}/{soNgay}</div></div>
+                  </div>
+                  <div className="mt-3 border-t border-stone-200 pt-2">
+                    <div className="text-xs font-semibold text-stone-600 mb-2">Số ca theo ngày</div>
+                    {chiTietNgay.length ? <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">{chiTietNgay.map(([ngay, soCa]) => <div key={ngay} className={`rounded border px-2 py-1 text-xs ${soCa < 2 ? "border-amber-300 bg-amber-50 text-amber-800" : "border-stone-200 bg-white text-stone-700"}`}><span className="font-medium">{ngay}</span><span className="float-right">{soCa} ca</span></div>)}</div> : <div className="text-xs text-stone-500">Chưa có lịch</div>}
+                  </div>
+                  {Object.values(theoNgay).some(n => n < 2) && <div className="mt-2 text-xs text-amber-700">Cảnh báo: có ngày chưa đủ 2 ca dạy.</div>}
+                </div>;
+              })}
+            </div>
+
+            <div className="overflow-x-auto">
+
+              <table className="w-full text-sm">
+
+                <thead><tr className="text-left text-stone-500 border-b"><th className="py-2">Ngày</th><th>Ca / Giờ</th><th>Môn học</th><th>Phòng</th><th>Tài khoản GV</th><th>Số tiết</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th></tr></thead>
+
+                <tbody>
+
+                  {dsLich.filter((l) => ["gv01", "gv02"].includes(taiKhoanCuaLich(l))).map((l) => {
+
+                    const n = dsNhatKy.find((x) => (x.lichDayId != null && l.id != null ? String(x.lichDayId) === String(l.id) : String(x.maLich) === String(l.maLich) && String(x.tenDangNhapGV || "").toLowerCase() === taiKhoanCuaLich(l)));
+
+                    return (
+
+                      <tr key={l.maLich} className={`border-b ${n && n.checkInMuon ? "bg-amber-50" : ""}`}>
+
+                        <td className="py-2">{l.ngay || "—"}</td><td>{l.ca} ({l.batDau}-{l.ketThuc})</td><td>{l.monHoc}</td><td>{l.maPhong}</td><td className="font-semibold">{String(taiKhoanCuaLich(l) || "").toUpperCase()}</td><td>{Number(l.soTiet ?? l.soTietDay ?? 2) || 0}</td>
+
+                        <td>{n ? <span>{n.checkIn} {n.checkInMuon && <Badge text="Check-in muộn" tone="yellow" />}</span> : "—"}</td>
+
+                        <td>{n && n.checkOut ? n.checkOut : "—"}</td><td><Badge text={l.trangThai} /></td>
+
+                      </tr>
+
+                    );
+
+                  })}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          </Card>
+
+        </div>
+
+      )}
+
+
+
+      {tab === 2 && (
+
+        <div>
+
+          <Card title="Yêu cầu đổi phòng có kế hoạch (UC11)" icon="clipboard-check">
+
+            {!planned.length && <Empty text="Không có yêu cầu nào." />}
+
+            <div className="space-y-3">
+
+              {planned.map((r) => (
+
+                <div key={r.maYeuCau} className="border border-stone-200 rounded-md p-3">
+
+                  <div className="flex flex-wrap justify-between gap-2">
+
+                    <div>
+
+                      <div className="font-semibold">{r.maYeuCau} · {r.monHoc} <Badge text={r.trangThai} /></div>
+
+                      <div className="text-sm text-stone-600">{r.gv}: {r.phongCu} → <b>{r.phongMoi}</b> · Lý do: {r.lyDo}</div>
+
+                    </div>
+
+                    {r.trangThai === "Chờ duyệt" && (
+
+                      <div className="flex gap-2 items-start">
+
+                        <Btn small kind="ghost" onClick={() => kiemTra(r)}>Kiểm tra xung đột lịch</Btn>
+
+                        <Btn small kind="green" onClick={() => duyet(r)}>Phê duyệt</Btn>
+
+                        <Btn small kind="danger" onClick={() => tuChoi(r)}>Từ chối</Btn>
+
+                      </div>
+
+                    )}
+
+                  </div>
+
+                  {ketQua[r.maYeuCau] && <div className="mt-2"><Alert type={ketQua[r.maYeuCau].ok ? "ok" : "error"}>{ketQua[r.maYeuCau].msg}</Alert></div>}
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </Card>
+
+          <Card title="Hậu kiểm đổi phòng khẩn cấp (UC12)" icon="user-shield">
+
+            <h4 className="font-semibold text-sm mb-2">Các ca đổi phòng tự động trước 08:00</h4>
+
+            {!urgent.length && <Empty text="Chưa có ca đổi phòng khẩn cấp nào." />}
+
+            {urgent.length > 0 && (
+
+              <table className="w-full text-sm mb-4">
+
+                <thead><tr className="text-left text-stone-500 border-b"><th className="py-2">Mã</th><th>Môn</th><th>Giảng viên</th><th>Phòng</th><th>Lúc</th><th>Lý do</th><th>Trạng thái</th></tr></thead>
+
+                <tbody>{urgent.map((r) => <tr key={r.maYeuCau} className="border-b"><td className="py-2">{r.maYeuCau}</td><td>{r.monHoc}</td><td>{r.gv}</td><td>{r.phongCu} → {r.phongMoi}</td><td>{r.thoiGian}</td><td>{r.lyDo}</td><td><Badge text={r.trangThai} /></td></tr>)}</tbody>
+
+              </table>
+
+            )}
+
+            <h4 className="font-semibold text-sm mb-2">Thông báo hậu kiểm đã phát sinh</h4>
+
+            {!dsThongBao.length && <Empty text="Chưa có thông báo hậu kiểm." />}
+
+            <div className="space-y-2">
+
+              {dsThongBao.map((t) => (
+
+                <div key={t.maThongBao} className="border border-sky-200 bg-sky-50 rounded-md p-3 text-sm">
+
+                  <div className="font-semibold">{t.maThongBao} · Gửi tới: {t.nguoiNhan} · {t.thoiGian} <Badge text={t.trangThai} tone="blue" /></div>
+
+                  <div className="text-stone-700">{t.noiDung}</div>
+
+                </div>
+
+              ))}
+
+            </div>
+
+          </Card>
+
+        </div>
+
+      )}
+
+
+
+      {tab === 3 && (
+
+        <div>
+
+          <div className="grid md:grid-cols-3 gap-4 mb-5">
+
+            {[
+
+              ["Tổng số ca sử dụng thực tế", thongKeSoCaSuDung(), "ca", "thongKeSoCaSuDung", "chalkboard"],
+
+              ["Tỷ lệ phòng trống theo tuần", tinhTyLePhongTrong(), "%", "tinhTyLePhongTrong", "door-open"],
+
+              ["Thời gian xử lý sự cố trung bình", tinhThoiGianXuLyTrungBinh(), "phút/ticket", "tinhThoiGianXuLyTrungBinh", "stopwatch"],
+
+            ].map(([ten, v, dv, fn, ic]) => (
+
+              <div key={fn} className="bg-white border border-stone-200 border-l-4 border-l-[#8B0000] rounded-lg p-5">
+
+                <div className="text-sm text-stone-600"><I n={ic} c="mr-2 text-[#8B0000]" />{ten}</div>
+
+                <div className="text-4xl font-bold mt-2">{v}<span className="text-base font-medium text-stone-500 ml-1">{dv}</span></div>
+
+                <div className="text-xs text-stone-400 mt-1">{fn}()</div>
+
+              </div>
+
+            ))}
+
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-5">
+
+            <Card title="Số ca được xếp theo phòng" icon="chart-column">
+
+              <div className="flex items-end gap-4 h-44 border-b border-stone-300 px-2">
+
+                {perRoom.map((x) => (
+
+                  <div key={x.ma} className="flex-1 flex flex-col items-center justify-end h-full">
+
+                    <span className="text-xs font-semibold mb-1">{x.v}</span>
+
+                    <div className="w-full bg-[#8B0000] rounded-t transition-all duration-500" style={{ height: `${(x.v / maxRoom) * 100}%`, minHeight: x.v ? "6px" : "2px", opacity: x.v ? 1 : 0.2 }}></div>
+
+                  </div>
+
+                ))}
+
+              </div>
+
+              <div className="flex gap-4 px-2 mt-1">{perRoom.map((x) => <div key={x.ma} className="flex-1 text-center text-xs text-stone-600">{x.ma}</div>)}</div>
+
+            </Card>
+
+            <Card title="Ticket sự cố theo trạng thái" icon="ticket">
+
+              <div className="space-y-3">
+
+                {tkTicket.map((x) => (
+
+                  <div key={x.ma}>
+
+                    <div className="flex justify-between text-sm mb-1"><span>{x.ma}</span><b>{x.v}</b></div>
+
+                    <div className="h-3 bg-stone-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${x.ma === "Chờ xử lý" ? "bg-red-500" : x.ma === "Đã khắc phục" ? "bg-green-600" : "bg-amber-500"}`} style={{ width: `${(x.v / maxTk) * 100}%` }}></div></div>
+
+                  </div>
+
+                ))}
+
+              </div>
+
+            </Card>
+
+          </div>
+
+          <p className="text-xs text-stone-500 mb-3">Tỷ lệ phòng trống = 1 − (tổng buổi/tuần đã xếp ÷ (số phòng × 6 ngày × 4 ca)). Thời gian xử lý trung bình tính từ lúc tạo Ticket đến lúc kỹ thuật viên xác nhận hoàn tất; bản demo tính theo giờ-phút trong cùng ngày.</p>
+
+          <Btn onClick={() => notify("Bản demo đã mô phỏng thao tác xuất báo cáo; chưa tạo tệp XLSX/PDF thật.", "info")}><I n="file-export" c="mr-1" />Mô phỏng xuất Báo cáo (.XLSX / .PDF)</Btn>
+
+        </div>
+
+      )}
+
+    </div>
+
+  );
+
+}
+
+
+
+/* ---------- Ket noi DntuLab.API ---------- */
+const API_BASE = ""; // Frontend duoc phuc vu cung host voi ASP.NET Core.
+const apiFetch = async (path, options = {}, token = localStorage.getItem("dntulab_access_token")) => {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const raw = await response.text();
+  let body = null;
+  try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+  if (!response.ok) throw new Error(body?.message || body?.title || `API lỗi HTTP ${response.status}`);
+  return body;
+};
+const unwrapData = (x) => Array.isArray(x) ? x : (Array.isArray(x?.data) ? x.data : []);
+const toUiDate = (value) => {
+  if (!value) return "";
+  const d = String(value).slice(0, 10).split("-");
+  return d.length === 3 ? `${d[2]}/${d[1]}/${d[0]}` : String(value);
+};
+const toUiTime = (value) => String(value || "").slice(0, 5);
+const mapLichFromApi = (x) => {
+  const tenApi = x.tenGiangVien || x.hoTenGiangVien || x.hoTenGV || x.giangVien?.hoTen || x.giangVien?.tenNguoiDung || x.nguoiDung?.hoTen || x.gv?.hoTen || x.giaoVien?.hoTen || (typeof x.gv === "string" ? x.gv : "") || "";
+  const mon = String(x.monHoc || x.tenMonHoc || "").toLowerCase();
+  const phong = String(x.maPhong || "").toUpperCase();
+  const usernameApi = String(x.tenDangNhapGV || x.taiKhoanGV || x.giangVien?.tenDangNhap || x.giangVien?.username || x.nguoiDung?.tenDangNhap || "").toLowerCase();
+  const accountByName = /trần xuân hoàng/i.test(tenApi) ? "gv01" : /nguyễn định khiêm/i.test(tenApi) ? "gv02" : "";
+  const accountBySubject = /web api|an toàn thông tin|học máy|ứng dụng di động/i.test(mon) ? "gv01" : /cơ sở dữ liệu|mạng máy tính|robotics|trí tuệ nhân tạo/i.test(mon) ? "gv02" : "";
+  const accountApi = ["gv01", "gv02"].includes(usernameApi) ? usernameApi : (accountByName || accountBySubject);
+  const tenTheoMon = mon.includes("web api") ? "Trần Xuân Hoàng" : mon.includes("cơ sở dữ liệu") ? "Nguyễn Định Khiêm" : mon.includes("phân tích thiết kế") ? "Nguyễn Định Khiêm" : mon.includes("mạng máy tính") ? "Lê Văn Minh" : (mon.includes("robot") || mon.includes("trí tuệ nhân tạo")) ? "Nguyễn Định Khiêm" : mon.includes("di động") ? "Trần Xuân Hoàng" : "";
+  const tenMau = INIT_LICH.find((m) => m.maLich === x.maLich)?.gv || INIT_LICH.find((m) => m.maPhong === phong && m.monHoc.toLowerCase() === mon)?.gv;
+  return {
+    id: x.id, maLich: x.maLich || `L${x.id}`, ngay: toUiDate(x.ngay), ca: x.ca,
+    batDau: toUiTime(x.batDau), ketThuc: toUiTime(x.ketThuc), monHoc: x.monHoc || x.tenMonHoc,
+    maPhong: x.maPhong, gv: tenApi || tenMau || tenTheoMon || "Chưa cập nhật", giangVienId: x.giangVienId || x.giangVien?.id || x.idGiangVien,
+    tenDangNhapGV: accountApi,
+    trangThai: x.trangThai || "Chưa check-in", soBuoi: x.soBuoi || 1, soTiet: Number(x.soTiet || x.soTietDay || 2)
+  };
+};
+const taiKhoanCuaLich = (l) => {
+  const username = String(l.tenDangNhapGV || l.taiKhoanGV || l.usernameGV || "").trim().toLowerCase();
+  if (["gv01", "gv02"].includes(username)) return username;
+  const ten = String(l.gv || l.tenGiangVien || "").trim().toLocaleLowerCase("vi");
+  if (ten === "trần xuân hoàng") return "gv01";
+  if (ten === "nguyễn định khiêm") return "gv02";
+  const mon = String(l.monHoc || "").toLocaleLowerCase("vi");
+  if (/web api|an toàn thông tin|học máy|ứng dụng di động/.test(mon)) return "gv01";
+  if (/cơ sở dữ liệu|mạng máy tính|robotics|trí tuệ nhân tạo/.test(mon)) return "gv02";
+  return "";
+};
+const cungMotLich = (a, b) => a?.id != null && b?.id != null
+  ? String(a.id) === String(b.id)
+  : String(a?.maLich || "") === String(b?.maLich || "") && taiKhoanCuaLich(a) === taiKhoanCuaLich(b);
+// Tao lich demo cho moi ngay tu 20/10/2026 den het 30/11/2026.
+// Moi ngay co 4 ca: GV01 day ca 1 + ca 3, GV02 day ca 2 + ca 4.
+const taoLichDemoDenCuoiThang11 = () => {
+  const start = new Date(2026, 9, 20); // bat dau 20/10/2026
+  const end = new Date(2026, 10, 30);
+  const slots = [
+    { ca: "Ca 1", batDau: "07:00", ketThuc: "09:00", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", monHoc: "Lập trình Web API", maPhong: "F507" },
+    { ca: "Ca 2", batDau: "09:30", ketThuc: "11:30", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", monHoc: "Cơ sở dữ liệu", maPhong: "G201" },
+    { ca: "Ca 3", batDau: "13:00", ketThuc: "15:00", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", monHoc: "An toàn thông tin", maPhong: "F509" },
+    { ca: "Ca 4", batDau: "15:30", ketThuc: "17:30", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", monHoc: "Trí tuệ nhân tạo và Robotics", maPhong: "AIBOT" },
+  ];
+  const courses = {
+    gv01: [
+      { monHoc: "Lập trình Web API", maPhong: "F507" },
+      { monHoc: "An toàn thông tin", maPhong: "F509" },
+      { monHoc: "Phát triển ứng dụng di động", maPhong: "F508" },
+      { monHoc: "Học máy ứng dụng", maPhong: "G203" },
+      { monHoc: "Trí tuệ nhân tạo và Robotics", maPhong: "AIBOT" },
+    ],
+    gv02: [
+      { monHoc: "Cơ sở dữ liệu", maPhong: "G201" },
+      { monHoc: "Trí tuệ nhân tạo và Robotics", maPhong: "AIBOT" },
+      { monHoc: "Mạng máy tính", maPhong: "G202" },
+      { monHoc: "Cơ sở dữ liệu nâng cao", maPhong: "F508" },
+      { monHoc: "Phân tích thiết kế hệ thống", maPhong: "G204" },
+    ],
+  };
+  const result = [];
+  for (let day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) {
+    const date = `${String(day.getDate()).padStart(2, "0")}/${String(day.getMonth() + 1).padStart(2, "0")}/${day.getFullYear()}`;
+    const keyDate = `${day.getFullYear()}${String(day.getMonth() + 1).padStart(2, "0")}${String(day.getDate()).padStart(2, "0")}`;
+    slots.forEach((slot, index) => {
+      const account = slot.tenDangNhapGV;
+      const pool = courses[account];
+      const accountSlot = account === "gv01" ? (index === 0 ? 0 : 1) : (index === 1 ? 0 : 1);
+      const course = pool[(Math.floor((day - start) / 86400000) + accountSlot) % pool.length];
+      result.push({
+        maLich: `DEMO_${keyDate}_${account.toUpperCase()}_${index + 1}`,
+        ngay: date, ca: slot.ca, batDau: slot.batDau, ketThuc: slot.ketThuc,
+        monHoc: course.monHoc, maPhong: course.maPhong, gv: slot.gv,
+        tenDangNhapGV: account, soTiet: 2, soBuoi: 1, trangThai: "Chưa check-in",
+      });
+    });
+  }
+  return result;
+};
+const LICH_DEMO_DAY_DU = taoLichDemoDenCuoiThang11();
+const damBaoDuLichDemo = (current = [], apiSchedules = []) => {
+  const saved = [...current, ...apiSchedules];
+  const source = LICH_DEMO_DAY_DU.map(seed => {
+    // Preserve status and check-in/out only for the exact same demo schedule key.
+    const existing = saved.find(x => String(x.maLich) === String(seed.maLich)) || saved.find(x =>
+      String(x.ngay || "") === String(seed.ngay || "") &&
+      String(x.ca || "") === String(seed.ca || "") &&
+      taiKhoanCuaLich(x) === seed.tenDangNhapGV
+    );
+    return existing ? { ...seed, ...existing, tenDangNhapGV: taiKhoanCuaLich(existing) || seed.tenDangNhapGV, soTiet: Number(existing.soTiet ?? seed.soTiet) || seed.soTiet } : seed;
+  });
+  const seen = new Set();
+  return source.filter(l => {
+    const key = `${l.ngay}|${l.batDau}|${l.ketThuc}|${taiKhoanCuaLich(l)}|${String(l.monHoc || "").toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+};
+
+const mapTicketFromApi = (x) => ({
+  id: x.id, maTicket: x.maTicket, maThietBi: x.maThietBi,
+  tenThietBi: x.tenThietBi, loaiLoi: x.loaiLoi, ghiChu: x.ghiChu || "",
+  nguoiBaoId: x.nguoiBaoId, thoiGianTao: x.thoiGianTao,
+  trangThai: x.trangThai, ktvXuLyId: x.ktvXuLyId,
+  thoiGianCapNhat: x.thoiGianCapNhat, thoiGianHoanTat: x.thoiGianHoanTat
+});
+
+/* ---------- Ứng dụng chính ---------- */
+
+function App() {
+
+  const [dsPhong, setDsPhong] = useStoredState("dntu_lab_phong", INIT_PHONG);
+  const [dsThietBi, setDsThietBi] = useStoredState("dntu_lab_thietbi", INIT_THIETBI);
+  const [dsLich, setDsLich] = useStoredState("dntu_lab_lich", INIT_LICH);
+  const [dsNhatKy, setDsNhatKy] = useStoredState("dntu_lab_nhatky", INIT_NHATKY);
+  const [dsTicket, setDsTicket] = useState([]);
+  const [dsYeuCau, setDsYeuCau] = useState([]);
+  const [dsThongBao, setDsThongBao] = useState([]);
+  const [dsGhiNhanTam, setDsGhiNhanTam] = useState([]);
+  const [token, setToken] = useState(() => localStorage.getItem("dntulab_access_token") || "");
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("dntulab_user") || "null"); } catch { return null; }
+  });
+  const [loginName, setLoginName] = useState("gv01");
+  const [loginPassword, setLoginPassword] = useState("Gv@123456");
+  const [loginError, setLoginError] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [dataBusy, setDataBusy] = useState(false);
+  const [dataError, setDataError] = useState("");
+  const [actor, setActor] = useState("gv");
+
+  const [systemTime, setSystemTime] = useState("07:05");
+  const [customTime, setCustomTime] = useState("07:05");
+
+  const [toast, setToast] = useState(null);
+
+  const loadApiData = async (activeToken, role) => {
+    setDataBusy(true); setDataError("");
+    try {
+      const [roomsRes, devicesRes, schedulesRes, logsRes] = await Promise.all([
+        apiFetch("/api/Phong", {}, activeToken),
+        apiFetch("/api/ThietBi", {}, activeToken),
+        apiFetch("/api/LichDay", {}, activeToken),
+        apiFetch("/api/NhatKy", {}, activeToken)
+      ]);
+      const rooms = unwrapData(roomsRes).map(x => ({ maPhong: x.maPhong, loaiPhong: x.loaiPhong, sucChua: Number(x.sucChua) || (String(x.maPhong || "").startsWith("F") ? 50 : String(x.maPhong || "").startsWith("G") ? 60 : x.maPhong === "AIBOT" ? 80 : 0), cum: x.cum }));
+      const apiDevices = unwrapData(devicesRes).map(x => ({ maThietBi: x.maThietBi, maPhong: x.maPhong, loai: x.loai, ten: x.ten, trangThai: x.trangThai }));
+      // Danh sách thiết bị là dữ liệu thực từ database; không tự sinh thiết bị giả trên frontend.
+      const devices = apiDevices;
+      const schedules = unwrapData(schedulesRes).map(mapLichFromApi);
+      const maLichTheoId = new Map(schedules.map(l => [String(l.id), l.maLich]));
+      const logs = unwrapData(logsRes).map(x => ({
+        id: x.id, maNhatKy: x.maNhatKy, maLich: maLichTheoId.get(String(x.lichDayId)) || String(x.lichDayId), lichDayId: x.lichDayId,
+        checkIn: x.thoiGianCheckIn, checkInMuon: x.checkInMuon, checkOut: x.thoiGianCheckOut,
+        daTatDien: x.daTatDien, daKhoaCua: x.daKhoaCua
+      }));
+      // Database la nguon du lieu chinh; khong giu snapshot nghiep vu trong localStorage.
+      setDsPhong(rooms.length ? rooms : INIT_PHONG);
+      setDsThietBi(devices);
+      setDsLich(schedules);
+      setDsNhatKy(logs);
+      setDsGhiNhanTam([]);
+      setDsThongBao([]);
+      setDsYeuCau([]);
+      setDsTicket([]);
+
+      if (role === "GV") {
+        const activeSchedules = schedules.filter(x => x.trangThai === "Đang diễn ra" && x.id != null);
+        const tempResults = await Promise.all(activeSchedules.map(x =>
+          apiFetch(`/api/GhiNhanTam/theo-lich/${x.id}`, {}, activeToken).catch(() => ({ data: [] }))
+        ));
+        setDsGhiNhanTam(tempResults.flatMap((res, index) => unwrapData(res).map(x => ({
+          id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId,
+          maLich:activeSchedules[index].maLich, maPhong:activeSchedules[index].maPhong,
+          maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa,
+          thoiGian:x.thoiGian, trangThai:x.trangThai
+        }))));
+      }
+      if (role === "KTV" || role === "QL") {
+        const ticketsRes = await apiFetch("/api/Ticket", {}, activeToken);
+        setDsTicket(unwrapData(ticketsRes).map(mapTicketFromApi));
+      }
+      if (role === "QL") {
+        const [requestsRes, notificationsRes] = await Promise.all([
+          apiFetch("/api/QuanLyYeuCauDoiPhong", {}, activeToken),
+          apiFetch("/api/ThongBao", {}, activeToken)
+        ]);
+        setDsYeuCau(unwrapData(requestsRes).map(x => {
+          const l = schedules.find(s => String(s.id) === String(x.lichDayId));
+          return { id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, lichDayId:x.lichDayId, maLich:l?.maLich || String(x.lichDayId),
+            monHoc:l?.monHoc || "", gv:x.tenGiangVien || "Chưa cập nhật", phongCu:x.phongCu, phongMoi:x.phongMoi,
+            lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao };
+        }));
+        setDsThongBao(unwrapData(notificationsRes).map(x => ({ ...x, thoiGian:x.thoiGian })));
+      }
+    } catch (e) {
+      setDataError(`Không tải được đầy đủ dữ liệu từ API: ${e.message}`);
+    } finally { setDataBusy(false); }
+  };
+
+  const doLogin = async (e) => {
+    e?.preventDefault(); setLoginBusy(true); setLoginError("");
+    try {
+      const result = await apiFetch("/api/Auth/login", { method: "POST", body: JSON.stringify({ tenDangNhap: loginName.trim(), matKhau: loginPassword }) }, null);
+      if (!result?.accessToken || !result?.user) throw new Error("API đăng nhập không trả về token hoặc thông tin người dùng.");
+      localStorage.setItem("dntulab_access_token", result.accessToken);
+      localStorage.setItem("dntulab_user", JSON.stringify(result.user));
+      setToken(result.accessToken); setCurrentUser(result.user);
+      const roleKey = ({ GV: "gv", KTV: "ktv", QL: "ql" })[result.user.vaiTro];
+      if (!roleKey) throw new Error("Vai trò tài khoản không hợp lệ.");
+      setActor(roleKey);
+      await loadApiData(result.accessToken, result.user.vaiTro);
+    } catch (e2) { setLoginError(e2.message || "Đăng nhập thất bại."); }
+    finally { setLoginBusy(false); }
+  };
+
+  const doLogout = () => {
+    localStorage.removeItem("dntulab_access_token"); localStorage.removeItem("dntulab_user");
+    setToken(""); setCurrentUser(null); setDataError("");
+  };
+
+  useEffect(() => {
+    if (!token || !currentUser) return;
+    const roleKey = ({ GV: "gv", KTV: "ktv", QL: "ql" })[currentUser.vaiTro];
+    if (roleKey) { setActor(roleKey); loadApiData(token, currentUser.vaiTro); }
+  }, []);
+
+  const notify = (msg, type = "ok") => {
+
+    setToast({ msg, type });
+
+    setTimeout(() => setToast(null), 4500);
+
+  };
+
+  const resetDemo = () => { if (window.confirm("Reset demo sẽ xóa các thay đổi mô phỏng trên trình duyệt và nạp lại dữ liệu ban đầu/API ở lần đăng nhập tiếp theo. Tiếp tục?")) { ["dntu_lab_data_initialized","dntu_lab_phong","dntu_lab_thietbi","dntu_lab_lich","dntu_lab_nhatky"].forEach(k => localStorage.removeItem(k)); window.location.reload(); } };
+  const S = { dsPhong, dsThietBi, setDsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, dsYeuCau, setDsYeuCau, dsThongBao, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, notify, gv: currentUser?.hoTen || ACTORS.gv.ten, token, currentUser, loadApiData };
+
+  const toastTone = { ok: "bg-green-700", warn: "bg-amber-600", error: "bg-red-700", info: "bg-sky-700" }[toast ? toast.type : "ok"];
+
+
+
+  if (!token || !currentUser) return (
+    <div className="min-h-screen bg-[#f6f4f3] flex items-center justify-center p-4">
+      <form onSubmit={doLogin} className="bg-white w-full max-w-md rounded-xl border border-stone-200 shadow-lg p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-12 h-12 rounded-full bg-[#8B0000] text-white flex items-center justify-center text-xl"><I n="graduation-cap" /></div>
+          <div><h1 className="font-bold text-stone-900">HỆ THỐNG QUẢN LÝ PHÒNG LAB</h1><p className="text-sm text-stone-500">Khoa CNTT - DNTU</p></div>
+        </div>
+        <h2 className="text-lg font-semibold mb-4">Đăng nhập hệ thống</h2>
+        {loginError && <div className="mb-3"><Alert type="error">{loginError}</Alert></div>}
+        <label className="block text-sm font-medium mb-1">Tên đăng nhập</label>
+        <input className={inputCls + " mb-3"} value={loginName} onChange={e => setLoginName(e.target.value)} autoComplete="username" required />
+        <label className="block text-sm font-medium mb-1">Mật khẩu</label>
+        <input className={inputCls + " mb-4"} type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} autoComplete="current-password" required />
+        <button disabled={loginBusy} className="w-full rounded-md bg-[#8B0000] text-white py-2.5 font-semibold hover:bg-[#6d0000] disabled:opacity-50">{loginBusy ? "Đang đăng nhập..." : "Đăng nhập"}</button>
+        <p className="text-xs text-stone-500 mt-4">Đăng nhập bằng tài khoản đã được tạo trong DntuLab.API. Vai trò giao diện được xác định từ tài khoản, không chọn thủ công.</p>
+      </form>
+    </div>
+  );
+
+  return (
+
+    <div className="min-h-screen">
+
+      <header className="sticky top-0 z-40 bg-[#8B0000] text-white shadow-lg">
+
+        <div className="max-w-6xl mx-auto px-4 py-3">
+
+          <div className="flex items-center gap-3">
+
+            <div className="w-11 h-11 rounded-full bg-white text-[#8B0000] flex items-center justify-center text-lg font-bold shrink-0"><I n="graduation-cap" /></div>
+
+            <div>
+
+              <h1 className="font-bold text-base md:text-lg leading-tight">HỆ THỐNG QUẢN LÝ PHÒNG LAB KHOA CNTT - DNTU</h1>
+
+              <p className="text-xs text-red-100">Nhóm thực hiện: Trần Xuân Hoàng - Nguyễn Định Khiêm - Phạm Hải Quân | GVHD: Nguyễn Thị Liệu</p>
+
+            </div>
+
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+
+            <div className="flex flex-wrap gap-2">
+
+              <span className="px-3 py-1.5 rounded-md text-sm font-semibold bg-white text-[#8B0000]"><I n={ACTORS[actor].icon} c="mr-2" />{ACTORS[actor].label}: {currentUser.hoTen}</span>
+              <button onClick={doLogout} className="px-3 py-1.5 rounded-md text-sm border border-red-200 hover:bg-white hover:text-[#8B0000]">Đăng xuất</button>
+
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+
+              <span className="text-sm"><I n="clock" c="mr-1" />Giờ hệ thống: <b className="text-lg">{systemTime}</b></span>
+
+              {TIMES.map((x) => (
+                <button key={x.t} onClick={() => { setSystemTime(x.t); setCustomTime(x.t); }} title={x.note} className={`px-2.5 py-1 rounded-md text-sm border ${systemTime === x.t ? "bg-amber-400 text-stone-900 border-amber-400 font-semibold" : "border-red-300 hover:bg-[#6d0000]"}`}>{x.t}</button>
+              ))}
+              <input aria-label="Giờ kiểm thử tùy chỉnh" type="time" value={customTime} onChange={e => setCustomTime(e.target.value)} className="rounded px-2 py-1 text-sm text-stone-900" />
+              <button onClick={() => setSystemTime(customTime)} className="px-2.5 py-1 rounded-md text-sm bg-white text-[#8B0000] font-semibold">Áp dụng giờ</button>
+              <button onClick={resetDemo} className="px-2.5 py-1 rounded-md text-sm border border-white hover:bg-white hover:text-[#8B0000]">Reset demo</button>
+
+            </div>
+
+          </div>
+
+          <p className="text-xs text-red-100 mt-2">{TIMES.find((x) => x.t === systemTime)?.note || "Giờ kiểm thử tùy chỉnh"}: {systemTime < "08:00" ? "có thể thử đổi phòng khẩn cấp; check-in phụ thuộc khung giờ ca." : "đã qua mốc 08:00, chặn đổi phòng khẩn cấp tự động."}</p>
+
+        </div>
+
+      </header>
+
+
+
+      <main className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-4"><Alert type={dataError ? "warn" : "info"}>{dataError || (dataBusy ? "Đang đồng bộ dữ liệu từ DntuLab.API..." : "Đã đăng nhập API. Danh mục phòng, thiết bị, lịch và nhật ký được tải từ SQL Server. Các thao tác ghi dữ liệu cần được nối lần lượt với endpoint nghiệp vụ trước khi dùng như hệ thống thật.")}</Alert></div>
+
+        <h2 className="text-xl font-bold text-stone-800 mb-4"><I n={ACTORS[actor].icon} c="mr-2 text-[#8B0000]" />{ACTORS[actor].label}</h2>
+
+        {actor === "gv" && <TeacherView {...S} />}
+
+        {actor === "ktv" && <TechView {...S} />}
+
+        {actor === "ql" && <ManagerView {...S} />}
+
+      </main>
+
+
+
+      {toast && (
+
+        <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] text-white px-4 py-3 rounded-lg shadow-xl max-w-lg text-sm ${toastTone}`} role="status">
+
+          {toast.msg}
+
+        </div>
+
+      )}
+
+    </div>
+
+  );
+
+}
+
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+    </script>
+
+</body>
+
+</html>
