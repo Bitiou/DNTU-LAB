@@ -1,11 +1,15 @@
 ﻿
+using System.Data;
+using System.Security.Claims;
+
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
+using DntuLab.Api.DTOs;
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
-using DntuLab.Api.DTOs;
+
 namespace DntuLab.Api.Controllers;
 
 [ApiController]
@@ -20,6 +24,11 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
         _context = context;
     }
 
+    // =====================================================
+    // GET: Lấy danh sách yêu cầu đổi phòng
+    // GET /api/QuanLyYeuCauDoiPhong
+    // GET /api/QuanLyYeuCauDoiPhong?trangThai=Chờ duyệt
+    // =====================================================
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? trangThai = null)
@@ -61,13 +70,18 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
         });
     }
 
+    // =====================================================
+    // POST: Phê duyệt yêu cầu đổi phòng
+    // POST /api/QuanLyYeuCauDoiPhong/{id}/phe-duyet
+    // =====================================================
     [HttpPost("{id:int}/phe-duyet")]
     public async Task<IActionResult> PheDuyet(
         int id,
-        [FromBody] DuyetYeuCauDoiPhongRequest request)
+        [FromBody] DuyetYeuCauDoiPhongRequest? request)
     {
         await using var transaction =
-            await _context.Database.BeginTransactionAsync();
+            await _context.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable);
 
         var yeuCau = await _context.YeuCaus
             .FirstOrDefaultAsync(x => x.Id == id);
@@ -102,6 +116,7 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
+        // Kiểm tra phòng hiện tại có còn đúng với yêu cầu không.
         if (lich.MaPhong != yeuCau.PhongCu)
         {
             return Conflict(new
@@ -111,6 +126,7 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
+        // Kiểm tra phòng mới có bị trùng lịch hay không.
         var biTrungLich = await _context.LichDays
             .AnyAsync(x =>
                 x.Id != lich.Id &&
@@ -129,6 +145,7 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
+        // Xác định người đang đăng nhập và thực hiện duyệt.
         var userIdValue = User.FindFirstValue(
             ClaimTypes.NameIdentifier);
 
@@ -141,12 +158,14 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
-        // Chỉ cập nhật lịch sau khi kiểm tra hợp lệ.
+        // Cập nhật phòng trong lịch dạy.
         lich.MaPhong = yeuCau.PhongMoi;
+
+        // Cập nhật trạng thái yêu cầu.
         yeuCau.TrangThai = "Đã duyệt";
         yeuCau.NguoiDuyetId = nguoiDuyetId;
         yeuCau.ThoiGianDuyet = DateTime.Now;
-        yeuCau.GhiChuDuyet = request.GhiChuDuyet;
+        yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
 
         await _context.SaveChangesAsync();
         await transaction.CommitAsync();
@@ -161,11 +180,19 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
         });
     }
 
+    // =====================================================
+    // POST: Từ chối yêu cầu đổi phòng
+    // POST /api/QuanLyYeuCauDoiPhong/{id}/tu-choi
+    // =====================================================
     [HttpPost("{id:int}/tu-choi")]
     public async Task<IActionResult> TuChoi(
         int id,
-        [FromBody] DuyetYeuCauDoiPhongRequest request)
+        [FromBody] DuyetYeuCauDoiPhongRequest? request)
     {
+        await using var transaction =
+            await _context.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable);
+
         var yeuCau = await _context.YeuCaus
             .FirstOrDefaultAsync(x => x.Id == id);
 
@@ -187,6 +214,7 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
+        // Xác định người thực hiện từ chối.
         var userIdValue = User.FindFirstValue(
             ClaimTypes.NameIdentifier);
 
@@ -202,9 +230,10 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
         yeuCau.TrangThai = "Từ chối";
         yeuCau.NguoiDuyetId = nguoiDuyetId;
         yeuCau.ThoiGianDuyet = DateTime.Now;
-        yeuCau.GhiChuDuyet = request.GhiChuDuyet;
+        yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
 
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
 
         return Ok(new
         {
@@ -214,5 +243,4 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             trangThai = yeuCau.TrangThai
         });
     }
-
 }

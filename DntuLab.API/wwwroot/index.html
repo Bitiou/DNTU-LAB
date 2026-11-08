@@ -246,12 +246,6 @@ const INIT_YEUCAU = [
   { maYeuCau: "YC001", maLich: "L1", monHoc: "Lập trình Web API", gv: "Trần Xuân Hoàng", phongCu: "F507", phongMoi: "F508", lyDo: "Cần thêm chỗ ngồi cho lớp ghép", loai: "Có kế hoạch", trangThai: "Chờ duyệt", thoiGian: "Hôm qua 16:40" },
 ];
 
-const IMPORT_ROWS = [
-  { maLich: "L10", ngay: "18/10/2026", ca: "Ca 2", batDau: "09:30", ketThuc: "11:30", monHoc: "Cơ sở dữ liệu", maPhong: "G201", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
-  { maLich: "L11", ngay: "18/10/2026", ca: "Ca 3", batDau: "13:00", ketThuc: "15:00", monHoc: "An toàn thông tin", maPhong: "F507", gv: "Trần Xuân Hoàng", tenDangNhapGV: "gv01", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
-  { maLich: "L12", ngay: "18/10/2026", ca: "Ca 4", batDau: "15:30", ketThuc: "17:30", monHoc: "Phát triển ứng dụng di động", maPhong: "AIBOT", gv: "Nguyễn Định Khiêm", tenDangNhapGV: "gv02", soTiet: 2, trangThai: "Chưa check-in", soBuoi: 1 },
-];
-
 const ACTORS = {
 
   gv: { label: "Giảng viên", ten: "Nguyễn Định Khiêm", icon: "chalkboard-user" },
@@ -1065,11 +1059,80 @@ function ManagerView(S) {
 
   const [tab, setTab] = useState(1);
 
-  const [preview, setPreview] = useState(null);
-
-  const [daImport, setDaImport] = useState(false);
+  const [excelFile, setExcelFile] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importErrors, setImportErrors] = useState([]);
+  const [importSummary, setImportSummary] = useState("");
 
   const [ketQua, setKetQua] = useState({});
+
+  const taiMauExcel = async () => {
+    try {
+      const response = await fetch("/api/ImportLichExcel/mau", {
+        headers: { Authorization: `Bearer ${S.token}` }
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || `Không tải được file mẫu (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "Mau_Import_LichDay_DNTU.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(error.message, "error");
+    }
+  };
+
+  const thucHienImport = async () => {
+    if (!excelFile) {
+      notify("Vui lòng chọn file Excel .xlsx.", "error");
+      return;
+    }
+
+    setImportBusy(true);
+    setImportErrors([]);
+    setImportSummary("");
+
+    try {
+      const form = new FormData();
+      form.append("file", excelFile);
+
+      // Không tự đặt Content-Type: browser phải tự thêm multipart boundary.
+      const response = await fetch("/api/ImportLichExcel", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${S.token}` },
+        body: form
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setImportErrors(Array.isArray(result.errors) ? result.errors : []);
+        throw new Error(result.message || `Import thất bại (HTTP ${response.status}).`);
+      }
+
+      setImportSummary(
+        `${result.message || "Import thành công."} ` +
+        `Đã thêm: ${result.importedCount || 0}; bỏ qua dòng trùng: ${result.duplicateCount || 0}.`
+      );
+
+      const schedulesResponse = await apiFetch("/api/LichDay", {}, S.token);
+      setDsLich(unwrapData(schedulesResponse).map(mapLichFromApi));
+      setExcelFile(null);
+      const input = document.getElementById("import-lich-excel-file");
+      if (input) input.value = "";
+      notify(result.message || "Import thành công.", "ok");
+    } catch (error) {
+      notify(error.message, "error");
+    } finally {
+      setImportBusy(false);
+    }
+  };
 
 
 
@@ -1096,44 +1159,103 @@ function ManagerView(S) {
 
 
   const kiemTra = (r) => {
-
     const l = dsLich.find((x) => x.maLich === r.maLich);
 
-    const dung = dsLich.filter((x) => x.maLich !== l.maLich && x.maPhong === r.phongMoi && x.ngay === l.ngay && x.trangThai !== "Đã kết thúc" && overlap(x, l));
+    if (!l) {
+      setKetQua((p) => ({
+        ...p,
+        [r.maYeuCau]: { ok: false, msg: "Không tìm thấy lịch dạy liên quan. Hãy tải lại dữ liệu." }
+      }));
+      return;
+    }
 
-    setKetQua((p) => ({ ...p, [r.maYeuCau]: dung.length ? { ok: false, msg: `Xung đột với ${dung.map((x) => `${x.monHoc} (${x.batDau}-${x.ketThuc})`).join(", ")} tại ${r.phongMoi}.` } : { ok: true, msg: `Không xung đột: ${r.phongMoi} trống trong khung ${l.batDau}-${l.ketThuc}.` } }));
+    const dung = dsLich.filter((x) =>
+      x.maLich !== l.maLich &&
+      x.maPhong === r.phongMoi &&
+      x.ngay === l.ngay &&
+      x.trangThai !== "Đã kết thúc" &&
+      overlap(x, l)
+    );
 
+    setKetQua((p) => ({
+      ...p,
+      [r.maYeuCau]: dung.length
+        ? { ok: false, msg: `Xung đột với ${dung.map((x) => `${x.monHoc} (${x.batDau}-${x.ketThuc})`).join(", ")} tại ${r.phongMoi}.` }
+        : { ok: true, msg: `Không xung đột: ${r.phongMoi} trống trong khung ${l.batDau}-${l.ketThuc}.` }
+    }));
   };
 
   const duyet = async (r) => {
+    const lich = dsLich.find((x) => x.maLich === r.maLich);
+    if (!lich || lich.id == null || r.id == null) {
+      notify("Không tìm thấy lịch hoặc ID yêu cầu trong database. Hãy tải lại dữ liệu.", "error");
+      return;
+    }
 
-    const l = dsLich.find((x) => x.maLich === r.maLich);
-
-    const dung = dsLich.some((x) => x.maLich !== l.maLich && x.maPhong === r.phongMoi && x.ngay === l.ngay && x.trangThai !== "Đã kết thúc" && overlap(x, l));
-
-    if (dung) { notify(`Không thể phê duyệt: ${r.phongMoi} đang xung đột lịch. Hãy từ chối hoặc xử lý lịch trùng.`, "error"); kiemTra(r); return; }
+    const conflict = dsLich.some((x) =>
+      String(x.id) !== String(lich.id) &&
+      x.maPhong === r.phongMoi &&
+      x.ngay === lich.ngay &&
+      x.trangThai !== "Đã kết thúc" &&
+      overlap(x, lich)
+    );
+    if (conflict) {
+      notify(`Không thể phê duyệt: ${r.phongMoi} đang xung đột lịch.`, "error");
+      kiemTra(r);
+      return;
+    }
 
     try {
-      if (r.id == null) throw new Error("Yêu cầu thiếu ID database.");
-      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/phe-duyet`, { method:"POST", body:JSON.stringify({ ghiChuDuyet:"" }) }, S.token);
-      setDsLich((p) => p.map((x) => (x.maLich === r.maLich ? { ...x, maPhong: r.phongMoi } : x)));
-      setDsYeuCau((p) => p.map((x) => (x.maYeuCau === r.maYeuCau ? { ...x, trangThai: "Đã duyệt" } : x)));
-      notify(`Đã phê duyệt ${r.maYeuCau} trên database.`, "ok");
-    } catch (e) { notify(e.message, "error"); }
+      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/phe-duyet`, {
+        method: "POST",
+        body: JSON.stringify({ ghiChuDuyet: "" })
+      }, S.token);
 
+      const [scheduleResponse, requestResponse] = await Promise.all([
+        apiFetch("/api/LichDay", {}, S.token),
+        apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token)
+      ]);
+      setDsLich(unwrapData(scheduleResponse).map(mapLichFromApi));
+      setDsYeuCau(unwrapData(requestResponse).map((x) => {
+        const related = dsLich.find((l) => String(l.id) === String(x.lichDayId));
+        return {
+          id: x.id, maYeuCau: x.maYeuCau || `YC${x.id}`,
+          lichDayId: x.lichDayId, maLich: related?.maLich || String(x.lichDayId),
+          monHoc: related?.monHoc || "", gv: x.tenGiangVien || "Chưa cập nhật",
+          phongCu: x.phongCu, phongMoi: x.phongMoi, lyDo: x.lyDo,
+          loai: x.loai, trangThai: x.trangThai, thoiGian: x.thoiGianTao
+        };
+      }));
+      notify(`Đã phê duyệt ${r.maYeuCau} và cập nhật phòng trong database.`, "ok");
+    } catch (error) {
+      notify(error.message, "error");
+    }
   };
 
   const tuChoi = async (r) => {
-
     try {
       if (r.id == null) throw new Error("Yêu cầu thiếu ID database.");
-      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/tu-choi`, { method:"POST", body:JSON.stringify({ ghiChuDuyet:"Từ chối qua giao diện quản lý" }) }, S.token);
-      setDsYeuCau((p) => p.map((x) => (x.maYeuCau === r.maYeuCau ? { ...x, trangThai: "Từ chối" } : x)));
-      notify(`Đã từ chối ${r.maYeuCau} trên database.`, "warn");
-    } catch (e) { notify(e.message, "error"); }
+      await apiFetch(`/api/QuanLyYeuCauDoiPhong/${r.id}/tu-choi`, {
+        method: "POST",
+        body: JSON.stringify({ ghiChuDuyet: "Từ chối qua giao diện quản lý" })
+      }, S.token);
 
+      const requestResponse = await apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token);
+      setDsYeuCau(unwrapData(requestResponse).map((x) => {
+        const related = dsLich.find((l) => String(l.id) === String(x.lichDayId));
+        return {
+          id: x.id, maYeuCau: x.maYeuCau || `YC${x.id}`,
+          lichDayId: x.lichDayId, maLich: related?.maLich || String(x.lichDayId),
+          monHoc: related?.monHoc || "", gv: x.tenGiangVien || "Chưa cập nhật",
+          phongCu: x.phongCu, phongMoi: x.phongMoi, lyDo: x.lyDo,
+          loai: x.loai, trangThai: x.trangThai, thoiGian: x.thoiGianTao
+        };
+      }));
+      notify(`Đã từ chối ${r.maYeuCau} và lưu trạng thái trong database.`, "warn");
+    } catch (error) {
+      notify(error.message, "error");
+    }
   };
-
 
 
   const perRoom = dsPhong.map((p) => ({ ma: p.maPhong, v: dsLich.filter((l) => l.maPhong === p.maPhong).length }));
@@ -1173,30 +1295,44 @@ function ManagerView(S) {
         <div>
 
           <Card title="Import lịch học từ Excel (UC10)" icon="file-excel">
-
-            <p className="text-sm text-stone-600 mb-3">Bản giả lập chỉ cập nhật lịch cho hai tài khoản GV01 và GV02; không tạo lịch cho tài khoản giảng viên khác.</p>
-            <Btn kind="ghost" disabled={daImport} onClick={() => setPreview(IMPORT_ROWS.filter(r => ["gv01", "gv02"].includes(String(r.tenDangNhapGV || "").toLowerCase())))}><I n="cloud-arrow-down" c="mr-1" />Giả lập tải file Excel từ Phòng Đào tạo/Khảo thí</Btn>
-
-            {daImport && <p className="text-sm text-green-700 mt-2">Đã import lịch cho hai tài khoản GV01 và GV02.</p>}
-
-            {preview && !daImport && (
-
-              <div className="mt-4">
-
-                <table className="w-full text-sm mb-3">
-
-                  <thead><tr className="text-left text-stone-500 border-b"><th className="py-2">Ca</th><th>Giờ</th><th>Môn học</th><th>Phòng</th><th>Giảng viên</th></tr></thead>
-
-                  <tbody>{preview.map((r) => <tr key={r.maLich} className="border-b"><td className="py-2">{r.ca}</td><td>{r.batDau}-{r.ketThuc}</td><td>{r.monHoc}</td><td>{r.maPhong}</td><td className="font-semibold">{String(r.tenDangNhapGV || "").toUpperCase()}</td></tr>)}</tbody>
-
-                </table>
-
-                <Btn onClick={() => { const rowsChiGV01GV02 = preview.filter(r => ["gv01", "gv02"].includes(String(r.tenDangNhapGV || "").toLowerCase())); setDsLich((p) => [...p.filter(x => !rowsChiGV01GV02.some(r => String(x.maLich) === String(r.maLich))), ...rowsChiGV01GV02]); setDaImport(true); setPreview(null); notify(`Import thành công ${rowsChiGV01GV02.length} dòng lịch cho GV01/GV02.`, "ok"); }}>Xác nhận Import</Btn>
-
-              </div>
-
+            <p className="text-sm text-stone-600 mb-3">
+              Chọn file .xlsx để Backend đọc dữ liệu, kiểm tra phòng, giảng viên, ngày giờ và lưu lịch trực tiếp vào SQL Server.
+              Chỉ tài khoản quản lý mới được thực hiện chức năng này.
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn kind="ghost" onClick={taiMauExcel}>
+                <I n="download" c="mr-1" />Tải file Excel mẫu
+              </Btn>
+              <input
+                id="import-lich-excel-file"
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="text-sm max-w-full"
+                disabled={importBusy}
+                onChange={(event) => {
+                  setExcelFile(event.target.files?.[0] || null);
+                  setImportErrors([]);
+                  setImportSummary("");
+                }}
+              />
+              <Btn disabled={!excelFile || importBusy} onClick={thucHienImport}>
+                {importBusy ? "Đang kiểm tra và import..." : "Import vào database"}
+              </Btn>
+            </div>
+            {excelFile && (
+              <p className="text-xs text-stone-500 mt-2">
+                File đã chọn: {excelFile.name} ({Math.ceil(excelFile.size / 1024)} KB)
+              </p>
             )}
-
+            {importSummary && <Alert type="ok">{importSummary}</Alert>}
+            {importErrors.length > 0 && (
+              <div className="mt-3">
+                <Alert type="error">Có dữ liệu không hợp lệ. Backend chưa lưu dòng nào:</Alert>
+                <ul className="list-disc pl-5 mt-2 text-sm text-red-700">
+                  {importErrors.map((error, index) => <li key={index}>{error}</li>)}
+                </ul>
+              </div>
+            )}
           </Card>
 
           <Card title="Giám sát nhật ký ca học (UC13)" icon="eye">

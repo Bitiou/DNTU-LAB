@@ -1,10 +1,8 @@
 ﻿
-using System.ComponentModel.DataAnnotations;
-
 namespace DntuLab.Api.DTOs;
 
 public class DuyetYeuCauDoiPhongRequest
 {
-    [Required]
-    public string GhiChuDuyet { get; set; } = string.Empty;
+    // Ghi chú duyệt không bắt buộc
+    public string? GhiChuDuyet { get; set; }
 }
