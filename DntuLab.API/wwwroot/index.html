@@ -274,7 +274,7 @@ const DEV_ICON = { PC: "desktop", TV: "tv", WIFI: "wifi", TUSAC: "charging-stati
 
 /* ---------- Sơ đồ thiết bị ---------- */
 
-function DeviceGrid({ devices, onPick }) {
+function DeviceGrid({ devices, onPick, restrictPickToFaulty = false }) {
 
   const style = {
 
@@ -294,9 +294,9 @@ function DeviceGrid({ devices, onPick }) {
 
       {devices.map((d) => (
 
-        <button key={d.maThietBi} onClick={() => onPick && onPick(d)} title={`${d.ten} - ${d.trangThai}`}
+        <button key={d.maThietBi} onClick={() => onPick && onPick(d)} disabled={!onPick || (restrictPickToFaulty && d.trangThai === "Sẵn sàng")} title={`${d.ten} - ${d.trangThai}${restrictPickToFaulty && d.trangThai === "Sẵn sàng" ? " · KTV không thể chọn thiết bị màu xanh" : " · Nhấn để thao tác"}`}
 
-          className={`relative border-2 rounded-md p-2 text-center transition ${style[d.trangThai]} ${onPick ? "hover:shadow-md cursor-pointer" : "cursor-default"}`}>
+          className={`relative border-2 rounded-md p-2 text-center transition ${style[d.trangThai]} ${onPick && !(restrictPickToFaulty && d.trangThai === "Sẵn sàng") ? "hover:shadow-md cursor-pointer" : "cursor-not-allowed opacity-80"}`}>
 
           {d.trangThai === "Hỏng" && <I n="flag" c="absolute top-1 right-1 text-xs text-red-700" />}
 
@@ -338,10 +338,11 @@ const Legend = () => (
 
 function TeacherView(S) {
 
-  const { dsPhong, dsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, setDsThietBi, dsYeuCau, setDsYeuCau, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, gv, currentUser, notify } = S;
+  const { systemDate, dsPhong, dsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, setDsThietBi, dsYeuCau, setDsYeuCau, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, gv, currentUser, notify } = S;
 
   const [tab, setTab] = useState(1);
-  const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(new Date()));
+  const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(new Date(systemDate + "T12:00:00")));
+  useEffect(() => { setWeekAnchor(startOfWeek(new Date(systemDate + "T12:00:00"))); }, [systemDate]);
 
   const [loaiLoc, setLoaiLoc] = useState("PC");
 
@@ -354,6 +355,17 @@ function TeacherView(S) {
   const [coLich, setCoLich] = useState(null);
 
   const [tick, setTick] = useState({ dien: false, khoa: false });
+
+  // Khi API tự Check-out sau thời gian gia hạn, đóng modal đang mở để tránh
+  // người dùng gửi lại thao tác trên ca đã kết thúc.
+  useEffect(() => {
+    if (!coLich?.id) return;
+    const lichMoiNhat = dsLich.find(x => String(x.id) === String(coLich.id));
+    if (lichMoiNhat && lichMoiNhat.trangThai !== "Đang diễn ra") {
+      setCoLich(null);
+      setTick({ dien: false, khoa: false });
+    }
+  }, [dsLich, coLich]);
 
   const [mode, setMode] = useState("kehoach");
 
@@ -405,7 +417,8 @@ function TeacherView(S) {
 
   const nk = (maLich) => dsNhatKy.find((n) => n.maLich === maLich);
 
-  const canCheckIn = (l) => l.trangThai === "Chưa check-in" && toMin(systemTime) >= toMin(l.batDau) - 15 && toMin(systemTime) < toMin(l.ketThuc);
+  const selectedUiDate = (() => { const [y,m,d] = String(systemDate).split("-"); return `${d}/${m}/${y}`; })();
+  const canCheckIn = (l) => l.ngay === selectedUiDate && l.trangThai === "Chưa check-in" && toMin(systemTime) >= toMin(l.batDau) - 30 && toMin(systemTime) < toMin(l.batDau) + 30;
 
   // Mô phỏng quét QR: không mở camera và không đọc QR thật.
   // Người dùng bấm nút xác nhận trong hộp thoại để mô phỏng quét đúng mã phòng.
@@ -415,15 +428,21 @@ function TeacherView(S) {
 
 
 
-  const doCheckIn = (l, dung) => {
+  const doCheckIn = async (l, dung) => {
 
-    if (!canCheckIn(l)) { setQrResult({ type: "warn", msg: `Đã quét mã QR nhưng chưa thể check-in. Chỉ được check-in từ 15 phút trước giờ bắt đầu đến trước giờ kết thúc ca (${l.batDau}–${l.ketThuc}). Giờ hệ thống: ${systemTime}.` }); return; }
+    if (!canCheckIn(l)) { setQrResult({ type: "warn", msg: `Đã quét mã QR nhưng chưa thể check-in. Chỉ được check-in từ 30 phút trước đến trước 30 phút sau giờ bắt đầu ca (${l.batDau}). Sau mốc +30 phút hệ thống tự ghi nhận Check-in muộn và chuyển sang Check-out. Giờ hệ thống: ${systemTime}.` }); return; }
 
     if (!dung) { setQrResult({ type: "error", msg: "Mã phòng không khớp với lịch giảng dạy hiện tại của Thầy/Cô!" }); return; }
 
     const tre = toMin(systemTime) - toMin(l.batDau);
 
     const muon = tre > 15;
+    try {
+      await apiFetch("/api/CheckIn", { method: "POST", headers: { "X-Debug-Date": systemDate, "X-Debug-Time": systemTime }, body: JSON.stringify({ lichDayId: Number(l.id), maPhong: l.maPhong }) }, S.token);
+      const [schedulesRes, logsRes] = await Promise.all([apiFetch("/api/LichDay", {}, S.token), apiFetch("/api/NhatKy", {}, S.token)]);
+      setDsLich(unwrapData(schedulesRes).map(mapLichFromApi));
+      setDsNhatKy(unwrapData(logsRes));
+    } catch (e) { setQrResult({ type: "error", msg: e.message || "Không thể lưu Check-in." }); return; }
 
     setDsLich((p) => p.map((x) => (cungMotLich(x, l) ? { ...x, trangThai: "Đang diễn ra" } : x)));
 
@@ -443,18 +462,56 @@ function TeacherView(S) {
 
   };
 
-  const doCheckOut = () => {
+  const doCheckOut = async () => {
 
     const l = coLich;
+    if (!l || l.id == null) {
+      notify("Không xác định được lịch học để lưu Check-out.", "error");
+      return;
+    }
+    if (!(tick.dien && tick.khoa)) {
+      notify("Vui lòng xác nhận đã tắt điện và khóa cửa.", "warn");
+      return;
+    }
 
-    setDsLich((p) => p.map((x) => (cungMotLich(x, l) ? { ...x, trangThai: "Đã kết thúc" } : x)));
+    try {
+      // Check-out thủ công phải được lưu qua API/SQL Server, không chỉ đổi state giao diện.
+      await apiFetch("/api/CheckOut", {
+        method: "POST",
+        headers: { "X-Debug-Date": systemDate, "X-Debug-Time": systemTime },
+        body: JSON.stringify({
+          lichDayId: Number(l.id),
+          daTatDien: true,
+          daKhoaCua: true
+        })
+      });
 
-    setDsNhatKy((p) => p.map((n) => ((n.lichDayId != null && l.id != null ? String(n.lichDayId) === String(l.id) : String(n.maLich) === String(l.maLich) && String(n.tenDangNhapGV || "").toLowerCase() === taiKhoanCuaLich(l)) ? { ...n, checkOut: systemTime } : n)));
+      const [schedulesRes, logsRes] = await Promise.all([
+        apiFetch("/api/LichDay"),
+        apiFetch("/api/NhatKy")
+      ]);
+      const lichMoiNhat = unwrapData(schedulesRes).map(mapLichFromApi);
+      const maLichTheoId = new Map(lichMoiNhat.map(x => [String(x.id), x.maLich]));
+      setDsLich(lichMoiNhat);
+      setDsNhatKy(unwrapData(logsRes).map(x => ({
+        id: x.id,
+        maNhatKy: x.maNhatKy,
+        maLich: maLichTheoId.get(String(x.lichDayId)) || String(x.lichDayId),
+        lichDayId: x.lichDayId,
+        checkIn: x.thoiGianCheckIn,
+        checkInMuon: x.checkInMuon,
+        checkOut: x.thoiGianCheckOut,
+        daTatDien: x.daTatDien,
+        daKhoaCua: x.daKhoaCua
+      })));
 
-    setCoLich(null); setTick({ dien: false, khoa: false });
-    setTab(1);
-
-    notify(`Đã check-out ca ${l.ca} lúc ${systemTime}. Sơ đồ phòng đã đóng.`, "ok");
+      setCoLich(null);
+      setTick({ dien: false, khoa: false });
+      setTab(1);
+      notify(`Đã lưu Check-out ca ${l.ca} lúc ${systemTime}. Sơ đồ phòng đã đóng.`, "ok");
+    } catch (e) {
+      notify(e.message || "Không thể lưu Check-out.", "error");
+    }
 
   };
 
@@ -477,13 +534,20 @@ function TeacherView(S) {
   const submitUrgent = async () => {
     const l = dsLich.find((x) => x.maLich === f.maLich);
     if (systemTime >= "08:00") { notify("Đổi phòng khẩn cấp chỉ áp dụng trước 08:00.", "error"); return; }
-    if (!l || l.id == null || l.trangThai !== "Đang diễn ra") { notify("Chỉ đổi phòng cho ca đang diễn ra đã check-in.", "error"); return; }
+    if (!l || l.id == null || l.ngay !== selectedUiDate || l.trangThai !== "Đang diễn ra") { notify("Chỉ đổi phòng cho ca thuộc ngày Demo đang chọn và đã Check-in.", "error"); return; }
     if (!f.phongMoi || !f.lyDo.trim() || !phongHopLeFG(l.maPhong, f.phongMoi) || xungDot(l, f.phongMoi)) { notify("Phòng mới không hợp lệ hoặc bị trùng lịch.", "error"); return; }
     try {
-      await apiFetch("/api/DoiPhongKhanCap", { method: "POST", body: JSON.stringify({ lichDayId: Number(l.id), phongMoi: f.phongMoi, lyDo: f.lyDo.trim() }) }, S.token);
-      setDsLich(prev => prev.map(x => String(x.id) === String(l.id) ? { ...x, maPhong:f.phongMoi } : x));
+      const response = await apiFetch("/api/DoiPhongKhanCap", {
+        method: "POST",
+        headers: { "X-Debug-Date": systemDate, "X-Debug-Time": systemTime },
+        body: JSON.stringify({ lichDayId: Number(l.id), phongMoi: f.phongMoi, lyDo: f.lyDo.trim() })
+      }, S.token);
+
+      // Tai lai lich tu SQL Server de giao dien khong chi cap nhat tam tren local state.
+      const schedulesRes = await apiFetch("/api/LichDay", {}, S.token);
+      setDsLich(unwrapData(schedulesRes).map(mapLichFromApi));
       setF({ maLich: "", phongMoi: "", lyDo: "" });
-      notify(`Đã cập nhật đổi phòng ${l.maPhong} → ${f.phongMoi} trên database.`, "ok");
+      notify(response?.message || `Đã đổi phòng ${l.maPhong} → ${f.phongMoi} và lưu hậu kiểm.`, "ok");
     } catch (e) { notify(e.message, "error"); }
   };
 
@@ -496,12 +560,31 @@ function TeacherView(S) {
       if (d.maPhong.startsWith("F")) {
         if (!lich) throw new Error("Không tìm thấy lịch database phù hợp để ghi nhận tạm.");
         await apiFetch("/api/GhiNhanTam", { method:"POST", body:JSON.stringify({ lichDayId:Number(lich.id), maThietBi:d.maThietBi, moTa:moTaSuCo.trim() }) }, S.token);
-        const records = await apiFetch(`/api/GhiNhanTam/theo-lich/${lich.id}`, {}, S.token);
+        const [records, devicesRes] = await Promise.all([
+          apiFetch(`/api/GhiNhanTam/theo-lich/${lich.id}`, {}, S.token),
+          apiFetch("/api/ThietBi", {}, S.token)
+        ]);
         setDsGhiNhanTam(prev => [...prev.filter(x => String(x.lichDayId) !== String(lich.id)), ...unwrapData(records).map(x => ({ id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId, maLich:lich.maLich, maPhong:d.maPhong, maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa, nguoiGhi:gv, thoiGian:x.thoiGian, trangThai:x.trangThai }))]);
-        notify("Đã lưu ghi nhận tạm vào database.", "ok");
+        S.setDsThietBi(unwrapData(devicesRes).map(x => ({
+          maThietBi:x.maThietBi, maPhong:x.maPhong, loai:x.loai, ten:x.ten, trangThai:x.trangThai
+        })));
+        notify("Đã lưu ghi nhận tạm; thiết bị đã chuyển sang màu đỏ. Ticket chính thức được tạo khi tổng hợp.", "ok");
       } else {
-        await apiFetch("/api/Ticket", { method:"POST", body:JSON.stringify({ maThietBi:d.maThietBi, loaiLoi:loi || "Sự cố thiết bị", ghiChu:moTaSuCo.trim() }) }, S.token);
-        notify("Đã tạo Ticket chính thức trong database.", "ok");
+        await apiFetch("/api/Ticket", {
+          method:"POST",
+          body:JSON.stringify({ maThietBi:d.maThietBi, loaiLoi:loi || "Sự cố thiết bị", ghiChu:moTaSuCo.trim() })
+        }, S.token);
+
+        // Cap nhat ngay so do thiet bi va danh sach Ticket, khong can F5.
+        const [devicesRes, ticketsRes] = await Promise.all([
+          apiFetch("/api/ThietBi", {}, S.token),
+          apiFetch(`/api/Ticket/phong/${encodeURIComponent(d.maPhong)}`, {}, S.token)
+        ]);
+        S.setDsThietBi(unwrapData(devicesRes).map(x => ({
+          maThietBi:x.maThietBi, maPhong:x.maPhong, loai:x.loai, ten:x.ten, trangThai:x.trangThai
+        })));
+        S.setDsTicket(unwrapData(ticketsRes).map(mapTicketFromApi));
+        notify("Đã tạo Ticket; sơ đồ thiết bị và danh sách Ticket đã được cập nhật.", "ok");
       }
       setTbChon(null); setGhiChu(""); setMoTaSuCo(""); setLoi(LOI[0]);
     } catch (e) { notify(e.message, "error"); }
@@ -510,10 +593,22 @@ function TeacherView(S) {
   const guiTicketTongHop = async (g) => {
     try {
       if (g.id == null) throw new Error("Ghi nhận tạm chưa có ID database. Hãy tải lại dữ liệu.");
-      await apiFetch(`/api/GhiNhanTam/${g.id}/tong-hop`, { method:"POST" }, S.token);
-      const res = await apiFetch(`/api/GhiNhanTam/theo-lich/${g.lichDayId}`, {}, S.token);
-      setDsGhiNhanTam(prev => [...prev.filter(x => String(x.lichDayId) !== String(g.lichDayId)), ...unwrapData(res).map(x => ({ id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId, maLich:g.maLich, maPhong:g.maPhong, maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa, nguoiGhi:g.nguoiGhi, thoiGian:x.thoiGian, trangThai:x.trangThai }))]);
-      notify(`Đã tổng hợp ${g.maGhiNhan} thành Ticket trong database.`, "ok");
+      const result = await apiFetch(`/api/GhiNhanTam/${g.id}/tong-hop`, { method:"POST" }, S.token);
+      const lichDayId = Number(g.lichDayId ?? result?.lichDayId);
+      if (!Number.isInteger(lichDayId) || lichDayId <= 0) {
+        throw new Error("Ghi nhận thiếu LichDayId. Hãy tải lại danh sách ghi nhận tạm.");
+      }
+      const [res, devicesRes, ticketsRes] = await Promise.all([
+        apiFetch(`/api/GhiNhanTam/theo-lich/${lichDayId}`, {}, S.token),
+        apiFetch("/api/ThietBi", {}, S.token),
+        apiFetch(`/api/Ticket/phong/${encodeURIComponent(g.maPhong)}`, {}, S.token)
+      ]);
+      setDsGhiNhanTam(prev => [...prev.filter(x => String(x.lichDayId) !== String(lichDayId)), ...unwrapData(res).map(x => ({ id:x.id, maGhiNhan:x.maGhiNhan || `GN${x.id}`, lichDayId:x.lichDayId ?? lichDayId, maLich:g.maLich, maPhong:g.maPhong, maThietBi:x.maThietBi, tenThietBi:x.tenThietBi, moTa:x.moTa, nguoiGhi:g.nguoiGhi, thoiGian:x.thoiGian, trangThai:x.trangThai }))]);
+      S.setDsThietBi(unwrapData(devicesRes).map(x => ({
+        maThietBi:x.maThietBi, maPhong:x.maPhong, loai:x.loai, ten:x.ten, trangThai:x.trangThai
+      })));
+      S.setDsTicket(unwrapData(ticketsRes).map(mapTicketFromApi));
+      notify(result?.message || `Đã tổng hợp ${g.maGhiNhan} thành Ticket.`, "ok");
     } catch (e) { notify(e.message, "error"); }
   };
 
@@ -643,7 +738,7 @@ function TeacherView(S) {
               <span><span className="inline-block w-3 h-3 rounded-sm bg-green-200 border border-green-300 mr-1"></span>Cụm G</span>
               <span><span className="inline-block w-3 h-3 rounded-sm bg-violet-200 border border-violet-300 mr-1"></span>Lab AI / AIBOT</span>
             </div>
-            <p className="text-xs text-stone-500 mt-3">Nút Check-in chỉ mở từ 15 phút trước giờ vào ca đến khi hết ca. Dùng thanh giờ hệ thống phía trên để thử các tình huống.</p>
+            <p className="text-xs text-stone-500 mt-3">Giảng viên được Check-in từ 30 phút trước đến trước 30 phút sau giờ bắt đầu. Nếu chưa Check-in tại mốc +30 phút, hệ thống tự ghi nhận Check-in muộn và chuyển sang Check-out; quá giờ kết thúc 30 phút sẽ tự động Check-out.</p>
           </Card>
 
 
@@ -872,7 +967,7 @@ function TeacherView(S) {
                 <span className="mt-3 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">Đây là mã QR minh họa — không sử dụng camera</span>
               </div>
               <p className="text-sm text-stone-600">Trong bản mô phỏng, nhấn nút bên dưới để giả lập người dùng đã quét đúng mã QR tại phòng {qrLich.maPhong}. Hệ thống sẽ cập nhật trạng thái check-in trên giao diện.</p>
-              {!canCheckIn(qrLich) && <Alert type="warn">Đang ngoài khung giờ check-in hợp lệ. Để ghi nhận thành công, hãy chỉnh giờ hệ thống trong thanh kiểm thử về khoảng từ 15 phút trước giờ bắt đầu đến trước giờ kết thúc ca.</Alert>}
+              {!canCheckIn(qrLich) && <Alert type="warn">Đang ngoài khung giờ check-in hợp lệ. Để ghi nhận thủ công, hãy chỉnh giờ Demo trong khoảng từ 30 phút trước đến trước 30 phút sau giờ bắt đầu ca.</Alert>}
               <div className="flex flex-wrap justify-end gap-2">
                 <Btn kind="ghost" onClick={() => setQrLich(null)}>Hủy</Btn>
                 <Btn onClick={() => doCheckIn(qrLich, true)}><I n="qrcode" c="mr-1" />Mô phỏng quét thành công</Btn>
@@ -937,12 +1032,31 @@ function TeacherView(S) {
 /* ---------- Kỹ thuật viên ---------- */
 
 function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, notify, token }) {
-  const [thietBiDangChon, setThietBiDangChon] = useState(null);
-  const capNhatTrangThaiThietBi = (device, trangThai) => {
-    setDsThietBi(prev => prev.map(d => d.maThietBi === device.maThietBi ? { ...d, trangThai } : d));
-    setThietBiDangChon(null);
-    notify(`Kỹ thuật viên đã cập nhật ${device.maThietBi} thành "${trangThai}".`, "ok");
+  const capNhatTrangThaiThietBi = async (device, trangThai) => {
+    try {
+      await apiFetch(`/api/ThietBi/${encodeURIComponent(device.maThietBi)}/trang-thai`, {
+        method:"PUT", body:JSON.stringify({ trangThai })
+      }, token);
+      const [devicesRes, ticketsRes] = await Promise.all([
+        apiFetch("/api/ThietBi", {}, token), apiFetch("/api/Ticket", {}, token)
+      ]);
+      setDsThietBi(unwrapData(devicesRes).map(x => ({ maThietBi:x.maThietBi, maPhong:x.maPhong, loai:x.loai, ten:x.ten, trangThai:x.trangThai })));
+      setDsTicket(unwrapData(ticketsRes).map(mapTicketFromApi));
+      // Không có trạng thái thiết bị đang chọn trong TechView; cập nhật danh sách là đủ.
+      notify(`Đã cập nhật ${device.maThietBi}; trạng thái thiết bị và Ticket đã đồng bộ.`, "ok");
+    } catch (e) { notify(e.message || "Không thể cập nhật thiết bị.", "error"); }
   };
+  // KTV chi chon duoc thiet bi do/vang: Do -> Vang -> Xanh.
+  // Thiet bi xanh bi khoa, khong the tao loi tu giao dien KTV.
+  const chuyenMauThietBi = async (device) => {
+    if (device.trangThai === "Sẵn sàng") {
+      notify("Thiết bị màu xanh (Sẵn sàng) không thể chọn. KTV chỉ thao tác trên thiết bị màu đỏ hoặc vàng.", "warn");
+      return;
+    }
+    const nextStatus = device.trangThai === "Hỏng" ? "Đang bảo trì" : "Sẵn sàng";
+    await capNhatTrangThaiThietBi(device, nextStatus);
+  };
+
   const capNhatTrangThai = async (ticket, trangThai) => {
     try {
       if (ticket.id == null) throw new Error("Ticket chưa có ID database.");
@@ -968,16 +1082,15 @@ function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, 
   };
 
   const columns = [
-    { title: "Chờ tiếp nhận", statuses: ["Chờ xử lý"], tone: "red" },
-    { title: "Đang xử lý / Báo cáo cấp trên", statuses: ["Đang sửa chữa", "Báo cáo cấp trên"], tone: "yellow" },
-    { title: "Đã khắc phục / Đóng Ticket", statuses: ["Đã khắc phục"], tone: "green" },
+    { title: "Chờ tiếp nhận", statuses: ["Chờ xử lý", "Chờ tiếp nhận"], tone: "red" },
+    { title: "Đang xử lý", statuses: ["Đang sửa chữa", "Báo cáo cấp trên"], tone: "yellow" },
   ];
 
   return (
     <div>
       <Card title="Bảng Kanban xử lý Ticket sự cố (UC07–UC09)" icon="ticket">
-        <p className="text-sm text-stone-600 mb-4">Kỹ thuật viên tiếp nhận Ticket, xử lý khi phòng không có tiết học nếu sự cố nhẹ; sự cố nghiêm trọng hoặc vượt thẩm quyền được ghi nhận để báo cáo cấp trên. Sau khi khắc phục, kỹ thuật viên xác nhận hoàn tất để đóng Ticket và gỡ cờ lỗi thiết bị.</p>
-        <div className="grid lg:grid-cols-3 gap-4">
+        <p className="text-sm text-stone-600 mb-4">Chỉ thiết bị Hỏng (đỏ) và Đang bảo trì (vàng) được đưa vào Kanban. Thiết bị Sẵn sàng (xanh) chỉ hiển thị trên sơ đồ. Khi KTV đánh dấu Sẵn sàng, Ticket được hoàn thành và chuyển sang danh sách quản lý.</p>
+        <div className="grid lg:grid-cols-2 gap-4">
           {columns.map((col) => {
             const items = dsTicket.filter((t) => col.statuses.includes(t.trangThai));
             return (
@@ -1018,7 +1131,7 @@ function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, 
         </div>
       </Card>
       <Card title="Danh mục toàn bộ thiết bị các phòng LAB" icon="table-cells">
-        <p className="text-sm text-stone-600 mb-3">Kỹ thuật viên có thể bấm vào bất kỳ thiết bị nào (kể cả thiết bị đang Hỏng hoặc Đang bảo trì) để cập nhật trạng thái. Giảng viên chỉ được ghi nhận sự cố với thiết bị đang Sẵn sàng.</p>
+        <p className="text-sm text-stone-600 mb-3">KTV chỉ được nhấn thiết bị màu đỏ (Hỏng) hoặc màu vàng (Đang bảo trì): Đỏ → Vàng (tiếp nhận xử lý) → Xanh (xác nhận khắc phục). Thiết bị màu xanh bị khóa thao tác. Mỗi lần cập nhật, hệ thống tự tạo/cập nhật/đóng Ticket tương ứng. Giảng viên và kỹ thuật viên cùng nhìn thấy 6 bộ KIT tại AIBOT.</p>
         <Legend />
         {[
           { ten: "Cụm phòng F", phong: [...new Set(dsThietBi.filter((d) => /^F\d+/.test(d.maPhong)).map((d) => d.maPhong))].sort() },
@@ -1031,22 +1144,17 @@ function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, 
             {cum.phong.map((p) => (
               <div key={p} className="mb-4 rounded-md border border-stone-200 p-3">
                 <h5 className="font-semibold text-sm mb-3">Phòng {p} · {dsThietBi.filter((d) => d.maPhong === p).length} thiết bị</h5>
-                <DeviceGrid devices={dsThietBi.filter((d) => d.maPhong === p)} onPick={setThietBiDangChon} />
+                <DeviceGrid
+                  devices={dsThietBi.filter((d) => d.maPhong === p)}
+                  onPick={chuyenMauThietBi}
+                  restrictPickToFaulty
+                />
               </div>
             ))}
           </div>
         ))}
       </Card>
-      {thietBiDangChon && <Modal title={`Quản lý thiết bị ${thietBiDangChon.maThietBi}`} onClose={() => setThietBiDangChon(null)}>
-        <p className="text-sm text-stone-600 mb-2">{thietBiDangChon.ten} · Phòng {thietBiDangChon.maPhong}</p>
-        <p className="text-sm mb-4">Trạng thái hiện tại: <Badge text={thietBiDangChon.trangThai} /></p>
-        <p className="text-sm font-medium mb-2">Kỹ thuật viên có thể cập nhật trạng thái thiết bị:</p>
-        <div className="flex flex-wrap gap-2">
-          <Btn kind="green" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Sẵn sàng")}>Đánh dấu sẵn sàng</Btn>
-          <Btn kind="danger" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Hỏng")}>Đánh dấu hỏng</Btn>
-          <Btn kind="amber" onClick={() => capNhatTrangThaiThietBi(thietBiDangChon, "Đang bảo trì")}>Đang bảo trì</Btn>
-        </div>
-      </Modal>}
+
     </div>
   );
 }
@@ -1055,7 +1163,7 @@ function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, 
 
 function ManagerView(S) {
 
-  const { dsPhong, dsLich, setDsLich, dsNhatKy, dsTicket, dsYeuCau, setDsYeuCau, dsThongBao, notify } = S;
+  const { systemDate, systemTime, dsPhong, dsLich, setDsLich, dsNhatKy, dsTicket, dsYeuCau, setDsYeuCau, dsThongBao, setDsThongBao, notify } = S;
 
   const [tab, setTab] = useState(1);
 
@@ -1136,6 +1244,35 @@ function ManagerView(S) {
 
 
 
+  const xuatBaoCao = async (dinhDang) => {
+    try {
+      const response = await fetch(`/api/reports/hieu-suat/${dinhDang}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${S.token}` }
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || body.title || `Xuất báo cáo thất bại (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      const contentDisposition = response.headers.get("content-disposition") || "";
+      const match = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const fallback = `DNTULab_BaoCaoHieuSuat.${dinhDang === "excel" ? "xlsx" : "pdf"}`;
+      const fileName = match ? decodeURIComponent(match[1] || match[2]) : fallback;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notify(`Đã tải báo cáo ${dinhDang.toUpperCase()} thành công.`, "ok");
+    } catch (error) {
+      notify(error.message || "Không thể xuất báo cáo.", "error");
+    }
+  };
+
   /* Hàm thống kê (UC14) */
 
   const thongKeSoCaSuDung = () => dsLich.filter((l) => l.trangThai === "Đang diễn ra" || l.trangThai === "Đã kết thúc").length;
@@ -1149,13 +1286,6 @@ function ManagerView(S) {
     return Math.max(0, Math.round((1 - daDat / tongCa) * 1000) / 10);
 
   };
-
-  const tinhThoiGianXuLyTrungBinh = () => {
-    const xong = dsTicket.filter((t) => t.thoiGianHoanTat && t.thoiGianTao);
-    const phutXuLy = xong.map((t) => Math.max(0, toMin(t.thoiGianHoanTat) - toMin(t.thoiGianTao)));
-    return phutXuLy.length ? Math.round(phutXuLy.reduce((s, n) => s + n, 0) / phutXuLy.length) : 0;
-  };
-
 
 
   const kiemTra = (r) => {
@@ -1258,15 +1388,39 @@ function ManagerView(S) {
   };
 
 
+  const xacNhanHauKiem = async (notification) => {
+    if (!notification?.id) {
+      notify("Thông báo thiếu ID database. Hãy tải lại dữ liệu.", "error");
+      return;
+    }
+    if (systemTime < "08:00") {
+      notify("Chỉ được xác nhận hậu kiểm từ 08:00 trở đi theo giờ Demo.", "warn");
+      return;
+    }
+    try {
+      await apiFetch(`/api/ThongBao/${notification.id}/hau-kiem`, {
+        method: "POST",
+        headers: {
+          "X-Debug-Date": systemDate,
+          "X-Debug-Time": systemTime
+        }
+      }, S.token);
+      setDsThongBao((previous) => previous.map((item) =>
+        item.id === notification.id
+          ? { ...item, trangThai: "Đã hậu kiểm" }
+          : item
+      ));
+      notify(`Đã xác nhận hậu kiểm ${notification.maThongBao}.`, "ok");
+    } catch (error) {
+      notify(error.message, "error");
+    }
+  };
+
   const perRoom = dsPhong.map((p) => ({ ma: p.maPhong, v: dsLich.filter((l) => l.maPhong === p.maPhong).length }));
 
   const maxRoom = Math.max(1, ...perRoom.map((x) => x.v));
 
-  const tkTicket = ["Chờ xử lý", "Đang sửa chữa", "Báo cáo cấp trên", "Đã khắc phục"].map((s) => ({ ma: s, v: dsTicket.filter((t) => t.trangThai === s).length }));
-
-  const maxTk = Math.max(1, ...tkTicket.map((x) => x.v));
-
-  const tabs = [[1, "file-excel", "Import lịch & Giám sát (UC10, UC13)"], [2, "clipboard-check", "Duyệt đổi phòng & Hậu kiểm (UC11-12)"], [3, "chart-column", "Báo cáo hiệu suất (UC14)"]];
+  const tabs = [[1, "file-excel", "Import lịch & Giám sát (UC10, UC13)"], [2, "clipboard-check", "Duyệt đổi phòng & Hậu kiểm (UC11-12)"], [3, "chart-column", "Báo cáo hiệu suất (UC14)"], [4, "ticket", "Quản lý Ticket sự cố"]];
 
   const planned = dsYeuCau.filter((r) => r.loai === "Có kế hoạch");
 
@@ -1489,7 +1643,17 @@ function ManagerView(S) {
                   <div className="font-semibold">{t.maThongBao} · Gửi tới: {t.nguoiNhan} · {t.thoiGian} <Badge text={t.trangThai} tone="blue" /></div>
 
                   <div className="text-stone-700">{t.noiDung}</div>
-
+                  {t.trangThai === "Chờ hậu kiểm sau 08:00" && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Btn
+                        disabled={systemTime < "08:00"}
+                        onClick={() => xacNhanHauKiem(t)}
+                      >
+                        <I n="clipboard-check" c="mr-1" />Xác nhận đã hậu kiểm
+                      </Btn>
+                      {systemTime < "08:00" && <span className="text-xs text-amber-700">Nút mở từ 08:00 theo giờ Demo.</span>}
+                    </div>
+                  )}
                 </div>
 
               ))}
@@ -1506,9 +1670,11 @@ function ManagerView(S) {
 
       {tab === 3 && (
 
-        <div>
+        <div className="w-full space-y-4">
 
-          <div className="grid md:grid-cols-3 gap-4 mb-5">
+          {/* KPI: dùng toàn bộ chiều rộng vùng nội dung, cân đối thành 2 cột */}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
 
             {[
 
@@ -1516,11 +1682,9 @@ function ManagerView(S) {
 
               ["Tỷ lệ phòng trống theo tuần", tinhTyLePhongTrong(), "%", "tinhTyLePhongTrong", "door-open"],
 
-              ["Thời gian xử lý sự cố trung bình", tinhThoiGianXuLyTrungBinh(), "phút/ticket", "tinhThoiGianXuLyTrungBinh", "stopwatch"],
-
             ].map(([ten, v, dv, fn, ic]) => (
 
-              <div key={fn} className="bg-white border border-stone-200 border-l-4 border-l-[#8B0000] rounded-lg p-5">
+              <div key={fn} className="min-w-0 w-full bg-white border border-stone-200 border-l-4 border-l-[#8B0000] rounded-lg p-5">
 
                 <div className="text-sm text-stone-600"><I n={ic} c="mr-2 text-[#8B0000]" />{ten}</div>
 
@@ -1534,45 +1698,47 @@ function ManagerView(S) {
 
           </div>
 
-          <div className="grid md:grid-cols-2 gap-5">
+          {/* Biểu đồ mở rộng toàn chiều ngang như các Card ở UC11-12 */}
+
+          <div className="w-full min-w-0">
 
             <Card title="Số ca được xếp theo phòng" icon="chart-column">
 
-              <div className="flex items-end gap-4 h-44 border-b border-stone-300 px-2">
+              <div className="w-full overflow-x-auto">
 
-                {perRoom.map((x) => (
+                <div className="min-w-[680px]">
 
-                  <div key={x.ma} className="flex-1 flex flex-col items-center justify-end h-full">
+                  <div className="flex items-end gap-3 sm:gap-4 h-56 border-b border-stone-300 px-2">
 
-                    <span className="text-xs font-semibold mb-1">{x.v}</span>
+                    {perRoom.map((x) => (
 
-                    <div className="w-full bg-[#8B0000] rounded-t transition-all duration-500" style={{ height: `${(x.v / maxRoom) * 100}%`, minHeight: x.v ? "6px" : "2px", opacity: x.v ? 1 : 0.2 }}></div>
+                      <div key={x.ma} className="flex-1 min-w-0 flex flex-col items-center justify-end h-full">
 
-                  </div>
+                        <span className="text-xs font-semibold mb-1">{x.v}</span>
 
-                ))}
+                        <div className="w-full max-w-16 bg-[#8B0000] rounded-t transition-all duration-500"
 
-              </div>
+                          style={{ height: `${maxRoom > 0 ? (x.v / maxRoom) * 100 : 0}%`, minHeight: x.v ? "6px" : "2px", opacity: x.v ? 1 : 0.2 }}></div>
 
-              <div className="flex gap-4 px-2 mt-1">{perRoom.map((x) => <div key={x.ma} className="flex-1 text-center text-xs text-stone-600">{x.ma}</div>)}</div>
+                        <span className="sr-only">{x.ma}: {x.v} ca</span>
 
-            </Card>
+                      </div>
 
-            <Card title="Ticket sự cố theo trạng thái" icon="ticket">
-
-              <div className="space-y-3">
-
-                {tkTicket.map((x) => (
-
-                  <div key={x.ma}>
-
-                    <div className="flex justify-between text-sm mb-1"><span>{x.ma}</span><b>{x.v}</b></div>
-
-                    <div className="h-3 bg-stone-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${x.ma === "Chờ xử lý" ? "bg-red-500" : x.ma === "Đã khắc phục" ? "bg-green-600" : "bg-amber-500"}`} style={{ width: `${(x.v / maxTk) * 100}%` }}></div></div>
+                    ))}
 
                   </div>
 
-                ))}
+                  <div className="flex gap-3 sm:gap-4 px-2 mt-2">
+
+                    {perRoom.map((x) => (
+
+                      <div key={x.ma} className="flex-1 min-w-0 text-center text-xs text-stone-600 whitespace-nowrap">{x.ma}</div>
+
+                    ))}
+
+                  </div>
+
+                </div>
 
               </div>
 
@@ -1580,12 +1746,75 @@ function ManagerView(S) {
 
           </div>
 
-          <p className="text-xs text-stone-500 mb-3">Tỷ lệ phòng trống = 1 − (tổng buổi/tuần đã xếp ÷ (số phòng × 6 ngày × 4 ca)). Thời gian xử lý trung bình tính từ lúc tạo Ticket đến lúc kỹ thuật viên xác nhận hoàn tất; bản demo tính theo giờ-phút trong cùng ngày.</p>
+          <div className="w-full rounded-lg border border-stone-200 bg-white p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
 
-          <Btn onClick={() => notify("Bản demo đã mô phỏng thao tác xuất báo cáo; chưa tạo tệp XLSX/PDF thật.", "info")}><I n="file-export" c="mr-1" />Mô phỏng xuất Báo cáo (.XLSX / .PDF)</Btn>
+            <p className="text-xs leading-relaxed text-stone-500">
+
+              Tỷ lệ phòng trống = 1 − (tổng buổi/tuần đã xếp ÷ (số phòng × 6 ngày × 4 ca)).
+
+              Theo dõi và quản lý tiến độ Ticket tại tab Quản lý Ticket sự cố.
+
+            </p>
+
+            <div className="shrink-0">
+
+              <div className="flex flex-wrap gap-2">
+                <Btn onClick={() => xuatBaoCao("excel")}><I n="file-excel" c="mr-1" />Xuất Excel (.XLSX)</Btn>
+                <Btn onClick={() => xuatBaoCao("pdf")}><I n="file-pdf" c="mr-1" />Xuất PDF (.PDF)</Btn>
+              </div>
+
+            </div>
+
+          </div>
 
         </div>
 
+      )}
+
+
+      {tab === 4 && (
+        <div>
+          <Card title="Quản lý phiếu sự cố thiết bị" icon="ticket">
+            <p className="text-sm text-stone-600 mb-4">Quản lý theo dõi các ghi nhận hỏng, tiến độ kỹ thuật viên, báo cáo cấp trên và kết quả hoàn thành. Thiết bị xanh Sẵn sàng không tạo Ticket đang mở.</p>
+            <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-5">
+              {[
+                { label: "Chờ tiếp nhận", statuses: ["Chờ xử lý", "Chờ tiếp nhận"], tone: "red" },
+                { label: "Đang xử lý", statuses: ["Đang sửa chữa", "Báo cáo cấp trên"], tone: "yellow" },
+                { label: "Báo cáo cấp trên", statuses: ["Báo cáo cấp trên"], tone: "blue" },
+                { label: "Đã hoàn thành", statuses: ["Đã khắc phục"], tone: "green" },
+              ].map((group) => (
+                <div key={group.label} className="border border-stone-200 rounded-lg p-3 bg-stone-50">
+                  <div className="text-sm text-stone-600">{group.label}</div>
+                  <div className="text-2xl font-bold mt-1">{dsTicket.filter(t => group.statuses.includes(t.trangThai)).length}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <Badge text="Tất cả Ticket" tone="blue" />
+              <span className="text-xs text-stone-500 self-center">Danh sách sắp xếp mới nhất trước; bao gồm cả Ticket đã đóng.</span>
+            </div>
+            {!dsTicket.length && <Empty text="Chưa có Ticket sự cố." />}
+            <div className="space-y-3">
+              {[...dsTicket].sort((a,b) => new Date(b.thoiGianTao || 0) - new Date(a.thoiGianTao || 0)).map((t) => (
+                <article key={t.maTicket || t.id} className="border border-stone-200 rounded-lg p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="font-semibold">{t.maTicket} · {t.maThietBi}</div>
+                      <div className="text-xs text-stone-500 mt-1">{t.maPhong || "Chưa rõ phòng"} · Người ghi nhận: {t.nguoiBao || (t.nguoiBaoId ? `ID ${t.nguoiBaoId}` : "Chưa rõ")} · {t.thoiGianTao ? new Date(t.thoiGianTao).toLocaleString("vi-VN") : ""}</div>
+                    </div>
+                    <Badge text={t.trangThai} />
+                  </div>
+                  <p className="text-sm mt-2">{t.ghiChu || t.loaiLoi || "Không có mô tả sự cố."}</p>
+                  <div className="text-xs text-stone-500 mt-2">
+                    {t.ktvXuLyId ? `KTV xử lý: ID ${t.ktvXuLyId}` : "Chưa có KTV tiếp nhận"}
+                    {t.thoiGianCapNhat ? ` · Cập nhật: ${new Date(t.thoiGianCapNhat).toLocaleString("vi-VN")}` : ""}
+                    {t.thoiGianHoanTat ? ` · Hoàn thành: ${new Date(t.thoiGianHoanTat).toLocaleString("vi-VN")}` : ""}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </Card>
+        </div>
       )}
 
     </div>
@@ -1715,13 +1944,26 @@ const damBaoDuLichDemo = (current = [], apiSchedules = []) => {
 
 const mapTicketFromApi = (x) => ({
   id: x.id, maTicket: x.maTicket, maThietBi: x.maThietBi,
-  tenThietBi: x.tenThietBi, loaiLoi: x.loaiLoi, ghiChu: x.ghiChu || "",
-  nguoiBaoId: x.nguoiBaoId, thoiGianTao: x.thoiGianTao,
+  tenThietBi: x.tenThietBi, maPhong: x.maPhong, loaiLoi: x.loaiLoi, ghiChu: x.ghiChu || "",
+  nguoiBao: x.tenNguoiBao, nguoiBaoId: x.nguoiBaoId, thoiGianTao: x.thoiGianTao,
   trangThai: x.trangThai, ktvXuLyId: x.ktvXuLyId,
   thoiGianCapNhat: x.thoiGianCapNhat, thoiGianHoanTat: x.thoiGianHoanTat
 });
 
 /* ---------- Ứng dụng chính ---------- */
+
+function getVietnamNowParts() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return {
+    date: `${value.year}-${value.month}-${value.day}`,
+    time: `${value.hour}:${value.minute}`
+  };
+}
 
 function App() {
 
@@ -1745,8 +1987,12 @@ function App() {
   const [dataError, setDataError] = useState("");
   const [actor, setActor] = useState("gv");
 
-  const [systemTime, setSystemTime] = useState("07:05");
-  const [customTime, setCustomTime] = useState("07:05");
+  // Ngày/giờ mặc định luôn lấy theo thời gian thực Việt Nam.
+  // Ngày Demo tương lai chỉ tồn tại trong phiên hiện tại; Reset/reload sẽ trả về hiện tại.
+  const initialVietnamNow = getVietnamNowParts();
+  const [systemDate, setSystemDate] = useState(initialVietnamNow.date);
+  const [systemTime, setSystemTime] = useState(initialVietnamNow.time);
+  const [customTime, setCustomTime] = useState(initialVietnamNow.time);
 
   const [toast, setToast] = useState(null);
 
@@ -1825,7 +2071,6 @@ function App() {
       const roleKey = ({ GV: "gv", KTV: "ktv", QL: "ql" })[result.user.vaiTro];
       if (!roleKey) throw new Error("Vai trò tài khoản không hợp lệ.");
       setActor(roleKey);
-      await loadApiData(result.accessToken, result.user.vaiTro);
     } catch (e2) { setLoginError(e2.message || "Đăng nhập thất bại."); }
     finally { setLoginBusy(false); }
   };
@@ -1838,8 +2083,26 @@ function App() {
   useEffect(() => {
     if (!token || !currentUser) return;
     const roleKey = ({ GV: "gv", KTV: "ktv", QL: "ql" })[currentUser.vaiTro];
-    if (roleKey) { setActor(roleKey); loadApiData(token, currentUser.vaiTro); }
-  }, []);
+    if (!roleKey) return;
+    setActor(roleKey);
+
+    let cancelled = false;
+    const syncPastLessons = async () => {
+      try {
+        // Dùng chung ngày/giờ Demo cho toàn bộ giảng viên.
+        await apiFetch("/api/LichDay/tu-dong-checkin-checkout", {
+          method: "POST",
+          headers: { "X-Debug-Date": systemDate, "X-Debug-Time": systemTime }
+        }, token);
+        if (!cancelled) await loadApiData(token, currentUser.vaiTro);
+      } catch (e) {
+        if (!cancelled) setDataError(`Không thể tự động hoàn tất ca học quá hạn: ${e.message}`);
+      }
+    };
+
+    syncPastLessons();
+    return () => { cancelled = true; };
+  }, [token, currentUser, systemDate, systemTime]);
 
   const notify = (msg, type = "ok") => {
 
@@ -1849,8 +2112,17 @@ function App() {
 
   };
 
-  const resetDemo = () => { if (window.confirm("Reset demo sẽ xóa các thay đổi mô phỏng trên trình duyệt và nạp lại dữ liệu ban đầu/API ở lần đăng nhập tiếp theo. Tiếp tục?")) { ["dntu_lab_data_initialized","dntu_lab_phong","dntu_lab_thietbi","dntu_lab_lich","dntu_lab_nhatky"].forEach(k => localStorage.removeItem(k)); window.location.reload(); } };
-  const S = { dsPhong, dsThietBi, setDsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, dsYeuCau, setDsYeuCau, dsThongBao, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, notify, gv: currentUser?.hoTen || ACTORS.gv.ten, token, currentUser, loadApiData };
+  const resetDemo = async () => {
+    if (!["GV", "KTV", "QL"].includes(currentUser?.vaiTro)) { notify("Tài khoản không có quyền Reset Demo.", "warn"); return; }
+    if (!window.confirm("Reset Demo sẽ khôi phục thiết bị và tạo sẵn Ticket lỗi mẫu (đỏ/vàng), đồng thời xóa Ticket demo cũ. Tiếp tục?")) return;
+    try {
+      const result = await apiFetch("/api/Database/reset-demo", { method: "POST" }, token);
+      ["dntu_lab_data_initialized","dntu_lab_phong","dntu_lab_thietbi","dntu_lab_lich","dntu_lab_nhatky"].forEach(k => localStorage.removeItem(k));
+      window.alert(result.message || "Đã Reset Demo thành công.");
+      window.location.reload();
+    } catch (e) { notify(e.message || "Không thể Reset Demo.", "error"); }
+  };
+  const S = { systemDate, dsPhong, dsThietBi, setDsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, dsYeuCau, setDsYeuCau, dsThongBao, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, notify, gv: currentUser?.hoTen || ACTORS.gv.ten, token, currentUser, loadApiData };
 
   const toastTone = { ok: "bg-green-700", warn: "bg-amber-600", error: "bg-red-700", info: "bg-sky-700" }[toast ? toast.type : "ok"];
 
@@ -1891,8 +2163,6 @@ function App() {
 
               <h1 className="font-bold text-base md:text-lg leading-tight">HỆ THỐNG QUẢN LÝ PHÒNG LAB KHOA CNTT - DNTU</h1>
 
-              <p className="text-xs text-red-100">Nhóm thực hiện: Trần Xuân Hoàng - Nguyễn Định Khiêm - Phạm Hải Quân | GVHD: Nguyễn Thị Liệu</p>
-
             </div>
 
           </div>
@@ -1908,20 +2178,22 @@ function App() {
 
             <div className="flex items-center gap-2 flex-wrap">
 
-              <span className="text-sm"><I n="clock" c="mr-1" />Giờ hệ thống: <b className="text-lg">{systemTime}</b></span>
+              <span className="text-sm"><I n="clock" c="mr-1" />Thời gian Demo:</span>
+              <input aria-label="Ngày kiểm thử" type="date" value={systemDate} onChange={e => setSystemDate(e.target.value)} className="rounded px-2 py-1 text-sm text-stone-900" />
+              <b className="text-lg">{systemTime}</b>
 
               {TIMES.map((x) => (
                 <button key={x.t} onClick={() => { setSystemTime(x.t); setCustomTime(x.t); }} title={x.note} className={`px-2.5 py-1 rounded-md text-sm border ${systemTime === x.t ? "bg-amber-400 text-stone-900 border-amber-400 font-semibold" : "border-red-300 hover:bg-[#6d0000]"}`}>{x.t}</button>
               ))}
               <input aria-label="Giờ kiểm thử tùy chỉnh" type="time" value={customTime} onChange={e => setCustomTime(e.target.value)} className="rounded px-2 py-1 text-sm text-stone-900" />
               <button onClick={() => setSystemTime(customTime)} className="px-2.5 py-1 rounded-md text-sm bg-white text-[#8B0000] font-semibold">Áp dụng giờ</button>
-              <button onClick={resetDemo} className="px-2.5 py-1 rounded-md text-sm border border-white hover:bg-white hover:text-[#8B0000]">Reset demo</button>
+              <button onClick={resetDemo} disabled={!(["GV", "KTV", "QL"].includes(currentUser?.vaiTro))} title="Khôi phục dữ liệu demo thiết bị và Ticket" className="px-2.5 py-1 rounded-md text-sm border border-white hover:bg-white hover:text-[#8B0000]">Reset demo</button>
 
             </div>
 
           </div>
 
-          <p className="text-xs text-red-100 mt-2">{TIMES.find((x) => x.t === systemTime)?.note || "Giờ kiểm thử tùy chỉnh"}: {systemTime < "08:00" ? "có thể thử đổi phòng khẩn cấp; check-in phụ thuộc khung giờ ca." : "đã qua mốc 08:00, chặn đổi phòng khẩn cấp tự động."}</p>
+          <p className="text-xs text-red-100 mt-2">Ngày Demo {systemDate} · {TIMES.find((x) => x.t === systemTime)?.note || "Giờ kiểm thử tùy chỉnh"}: {systemTime < "08:00" ? "có thể thử đổi phòng khẩn cấp; ca phải thuộc ngày Demo và đã Check-in." : "đã qua mốc 08:00, chặn đổi phòng khẩn cấp tự động."}</p>
 
         </div>
 

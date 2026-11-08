@@ -1,9 +1,13 @@
-﻿
+using System;
+
 using System.Data;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Claims;
+using System.Globalization;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
 using DntuLab.Api.DTOs;
+using DntuLab.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -22,9 +26,11 @@ public class CheckInController : ControllerBase
         _context = context;
     }
 
+
     [HttpPost]
     public async Task<IActionResult> CheckIn(
-        [FromBody] CheckInRequest request)
+        [FromBody] CheckInRequest request,
+        CancellationToken cancellationToken)
     {
         var userIdValue = User.FindFirstValue(
             ClaimTypes.NameIdentifier);
@@ -38,127 +44,143 @@ public class CheckInController : ControllerBase
             });
         }
 
-        await using var transaction =
-            await _context.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable);
+        var environment = HttpContext.RequestServices
+            .GetRequiredService<IWebHostEnvironment>();
 
-        var lich = await _context.LichDays
-            .FirstOrDefaultAsync(x => x.Id == request.LichDayId);
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        if (lich == null)
+        Func<Task<IActionResult>> operation = async () =>
         {
-            return NotFound(new
+            // Mỗi lần retry phải đọc lại dữ liệu mới từ database.
+            _context.ChangeTracker.Clear();
+
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable,
+                    cancellationToken);
+
+            var lich = await _context.LichDays
+                .FirstOrDefaultAsync(
+                    x => x.Id == request.LichDayId,
+                    cancellationToken);
+
+            if (lich == null)
             {
-                success = false,
-                message = "Không tìm thấy lịch dạy."
-            });
-        }
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Không tìm thấy lịch dạy."
+                });
+            }
 
-        if (lich.GiangVienId != giangVienId)
-        {
-            return Forbid();
-        }
-
-        var hienTai = DateTime.Now;
-        var ngayHienTai = DateOnly.FromDateTime(hienTai);
-        var gioHienTai = TimeOnly.FromDateTime(hienTai);
-
-        if (lich.Ngay != ngayHienTai)
-        {
-            return BadRequest(new
+            if (lich.GiangVienId != giangVienId)
             {
-                success = false,
-                message = "Lịch dạy không thuộc ngày hôm nay."
-            });
-        }
+                return Forbid();
+            }
 
-        if (!string.Equals(
-            lich.MaPhong,
-            request.MaPhong.Trim(),
-            StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(new
+            var hienTai = DemoClock.GetNow(Request, environment);
+            var ngayHienTai = DateOnly.FromDateTime(hienTai);
+            var gioHienTai = TimeOnly.FromDateTime(hienTai);
+
+            if (lich.Ngay != ngayHienTai)
             {
-                success = false,
-                message = "QR không khớp với phòng được phân công."
-            });
-        }
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Lịch dạy không thuộc ngày hôm nay."
+                });
+            }
 
-        var gioChoCheckIn = lich.BatDau.AddMinutes(-15);
-
-        if (gioHienTai < gioChoCheckIn ||
-            gioHienTai >= lich.KetThuc)
-        {
-            return BadRequest(new
+            if (!string.Equals(
+                lich.MaPhong,
+                request.MaPhong.Trim(),
+                StringComparison.OrdinalIgnoreCase))
             {
-                success = false,
-                message = "Chưa đến thời gian check-in hoặc lịch đã kết thúc."
-            });
-        }
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "QR không khớp với phòng được phân công."
+                });
+            }
 
-        if (lich.TrangThai != TrangThaiLich.ChuaCheckIn)
-        {
-            return Conflict(new
+            var gioChoCheckIn = lich.BatDau.AddMinutes(-30);
+            var gioKetThucCheckIn = lich.BatDau.AddMinutes(30);
+
+            if (gioHienTai < gioChoCheckIn ||
+                gioHienTai >= gioKetThucCheckIn)
             {
-                success = false,
-                message = "Lịch không ở trạng thái cho phép check-in."
-            });
-        }
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Chỉ được Check-in trong khoảng từ 30 phút trước đến trước 30 phút sau giờ bắt đầu ca. Sau mốc này hệ thống tự ghi nhận Check-in muộn và chuyển sang Check-out."
+                });
+            }
 
-        var daCheckIn = await _context.NhatKys
-            .AnyAsync(x => x.LichDayId == lich.Id);
-
-        if (daCheckIn)
-        {
-            return Conflict(new
+            if (lich.TrangThai != TrangThaiLich.ChuaCheckIn)
             {
-                success = false,
-                message = "Lịch này đã có nhật ký check-in."
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Lịch không ở trạng thái cho phép check-in."
+                });
+            }
+
+            var daCheckIn = await _context.NhatKys
+                .AnyAsync(
+                    x => x.LichDayId == lich.Id,
+                    cancellationToken);
+
+            if (daCheckIn)
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Lịch này đã có nhật ký check-in."
+                });
+            }
+
+            var batDauDateTime = lich.Ngay.ToDateTime(lich.BatDau);
+            var soPhutTre = Math.Max(
+                0,
+                (int)Math.Floor(
+                    (hienTai - batDauDateTime).TotalMinutes));
+
+            var checkInMuon = soPhutTre > 15;
+
+            var nhatKy = new NhatKyCheckIn
+            {
+                LichDayId = lich.Id,
+                ThoiGianCheckIn = hienTai,
+                CheckInMuon = checkInMuon,
+                SoPhutTre = soPhutTre
+            };
+
+            _context.NhatKys.Add(nhatKy);
+            lich.TrangThai = TrangThaiLich.DangDienRa;
+
+            await _context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return Ok(new
+            {
+                success = true,
+                message = checkInMuon
+                    ? "Check-in thành công, giảng viên đến muộn."
+                    : "Check-in thành công.",
+                data = new
+                {
+                    lich.Id,
+                    lich.MaLich,
+                    lich.MaPhong,
+                    nhatKy.ThoiGianCheckIn,
+                    nhatKy.SoPhutTre,
+                    nhatKy.CheckInMuon,
+                    lich.TrangThai
+                }
             });
-        }
-
-        var batDauDateTime = lich.Ngay.ToDateTime(lich.BatDau);
-        var soPhutTre = Math.Max(
-            0,
-            (int)Math.Floor(
-                (hienTai - batDauDateTime).TotalMinutes));
-
-        var checkInMuon = soPhutTre > 15;
-
-        var nhatKy = new NhatKyCheckIn
-        {
-            LichDayId = lich.Id,
-            ThoiGianCheckIn = hienTai,
-            CheckInMuon = checkInMuon,
-            SoPhutTre = soPhutTre
         };
 
-        _context.NhatKys.Add(nhatKy);
-
-        // Chỉ cập nhật lịch sau khi lưu nhật ký thành công.
-        await _context.SaveChangesAsync();
-
-        lich.TrangThai = TrangThaiLich.DangDienRa;
-
-        await _context.SaveChangesAsync();
-        await transaction.CommitAsync();
-
-        return Ok(new
-        {
-            success = true,
-            message = checkInMuon
-                ? "Check-in thành công, giảng viên đến muộn."
-                : "Check-in thành công.",
-            data = new
-            {
-                lich.Id,
-                lich.MaLich,
-                lich.MaPhong,
-                nhatKy.ThoiGianCheckIn,
-                nhatKy.SoPhutTre,
-                nhatKy.CheckInMuon,
-                lich.TrangThai
-            }
-        });
+        return await strategy.ExecuteAsync(operation);
     }
+
 }

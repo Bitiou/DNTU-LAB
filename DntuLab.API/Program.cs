@@ -66,7 +66,11 @@ var connectionString =
 if (!string.IsNullOrWhiteSpace(connectionString))
 {
     builder.Services.AddDbContext<LabDbContext>(options =>
-        options.UseSqlServer(connectionString));
+        options.UseSqlServer(connectionString, sqlOptions =>
+            sqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(5),
+                errorNumbersToAdd: new[] { 1205 })));
 }
 else
 {

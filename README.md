@@ -220,7 +220,110 @@ ORDER BY LD.Ngay, LD.BatDau, ND.TenDangNhap;
 GO
 ```
 
-## 7. Lưu ý khi làm việc với Entity Framework Core
+## 7. Quy tắc nghiệp vụ Check-in / Check-out theo giờ Demo
+
+Phần này mô tả quy tắc vận hành của ứng dụng DNTU LAB khi sử dụng **Thời
+gian Demo**. Đây là logic do Backend và giao diện xử lý; ba file SQL ở
+mục 2 chỉ tạo cấu trúc và dữ liệu mẫu, không tự triển khai bộ đếm thời
+gian.
+
+### 7.1. Quy tắc Check-in
+
+Với một ca học có giờ bắt đầu là `BatDau`:
+
+-   Giảng viên được phép Check-in thủ công từ **30 phút trước giờ bắt
+    đầu** đến trước mốc **30 phút sau giờ bắt đầu**.
+-   Check-in trước hoặc đúng giờ bắt đầu được ghi nhận là đúng giờ
+    (`CheckInMuon = 0`, `SoPhutTre = 0`).
+-   Check-in sau giờ bắt đầu nhưng trước mốc `BatDau + 30 phút` được ghi
+    nhận là muộn; số phút trễ được tính theo thời điểm Check-in thực tế.
+-   Nếu đến đúng mốc `BatDau + 30 phút` mà chưa có nhật ký Check-in, hệ
+    thống tự tạo Check-in muộn tại mốc đó (`CheckInMuon = 1`,
+    `SoPhutTre = 30`). Sau đó giao diện chuyển sang trạng thái/nút
+    Check-out.
+-   Nếu giảng viên đã Check-in thủ công, hệ thống không tạo thêm nhật ký
+    Check-in tự động.
+
+Ví dụ ca `07:00–09:00`:
+
+  -----------------------------------------------------------------------
+  Thời gian Demo                      Hành vi
+  ----------------------------------- -----------------------------------
+  Trước 06:30                         Chưa mở Check-in
+
+  06:30--06:59                        Giảng viên có thể Check-in sớm
+
+  07:00--07:29                        Giảng viên có thể Check-in; nếu sau
+                                      07:00 thì ghi nhận muộn
+
+  07:30                               Nếu chưa Check-in, hệ thống tự ghi
+                                      nhận Check-in muộn và chuyển sang
+                                      Check-out
+  -----------------------------------------------------------------------
+
+### 7.2. Quy tắc Check-out
+
+Sau khi ca học có nhật ký Check-in:
+
+-   Giảng viên có thể chủ động Check-out; không phải đợi đến giờ kết
+    thúc ca.
+-   Nếu giảng viên Check-out trước hạn tự động, hệ thống lưu thời điểm
+    Check-out thực tế và không tạo Check-out tự động lần nữa.
+-   Nếu đến đúng mốc `KetThuc + 30 phút` mà nhật ký vẫn chưa có
+    Check-out, hệ thống tự động Check-out tại mốc đó và chuyển ca sang
+    `Đã kết thúc`.
+-   Check-out tự động **không đồng nghĩa** với việc đã xác nhận tắt điện
+    hoặc khóa cửa. Hai trường `DaTatDien` và `DaKhoaCua` phải để `NULL`
+    nếu chưa có xác nhận thực tế.
+-   Sau khi đã Check-out, không cho tạo thêm nhật ký Check-out thứ hai
+    cho cùng ca.
+
+Ví dụ ca `07:00–09:00`:
+
+  -----------------------------------------------------------------------
+  Thời gian Demo                      Hành vi
+  ----------------------------------- -----------------------------------
+  07:30--09:29                        Có thể Check-out thủ công nếu ca đã
+                                      Check-in
+
+  09:30                               Nếu chưa Check-out, hệ thống tự
+                                      Check-out và chuyển `Đã kết thúc`
+  -----------------------------------------------------------------------
+
+### 7.3. Áp dụng cho mọi ca và chuyển giờ Demo
+
+-   Tính theo `Ngay`, `BatDau` và `KetThuc` của từng bản ghi `LichDay`;
+    không hard-code riêng giờ sáng hoặc giờ chiều.
+-   Cùng một quy tắc áp dụng cho ca sáng, chiều và các ngày khác.
+-   Khi người dùng thay đổi ngày/giờ Demo rồi nhấn **Áp dụng giờ**, ứng
+    dụng phải đánh giá lại các ca thuộc ngày Demo theo thời điểm mới.
+-   Khi tua giờ Demo từ buổi chiều về buổi sáng hoặc từ ngày sau về ngày
+    trước, không được để trạng thái của ca ở thời điểm tương lai làm sai
+    trạng thái của ca tại thời điểm Demo hiện tại.
+-   Cơ chế hoàn tác khi tua ngược chỉ phục vụ Development/Demo đối với
+    các sự kiện tự động do mô phỏng tạo ra; không dùng việc tua giờ Demo
+    để xóa nhật ký nghiệp vụ thật trên Production.
+
+### 7.4. Ánh xạ với bảng `NhatKyCheckIn`
+
+Bảng `NhatKyCheckIn` hiện có các cột phục vụ quy trình:
+
+  Cột                  Ý nghĩa
+  -------------------- -------------------------------------------------
+  `LichDayId`          Ca học được ghi nhận; mỗi ca chỉ có một nhật ký
+  `ThoiGianCheckIn`    Thời điểm Check-in thủ công hoặc tự động
+  `CheckInMuon`        Đánh dấu Check-in muộn
+  `SoPhutTre`          Số phút trễ so với `LichDay.BatDau`
+  `ThoiGianCheckOut`   Thời điểm Check-out thủ công hoặc tự động
+  `DaTatDien`          Xác nhận tắt điện; `NULL` nếu chưa xác nhận
+  `DaKhoaCua`          Xác nhận khóa cửa; `NULL` nếu chưa xác nhận
+
+**Lưu ý:** Quy tắc thời gian ở mục này là yêu cầu nghiệp vụ của ứng
+dụng. Không cần thêm cột hoặc thay đổi schema chỉ để biểu diễn các mốc
+30 phút; Backend phải thực hiện kiểm tra và cập nhật nhật ký đúng quy
+tắc.
+
+## 8. Lưu ý khi làm việc với Entity Framework Core
 
 Database được tạo bằng SQL script nên cần giữ đồng bộ với Entity Models
 và `LabDbContext` của backend.
@@ -235,37 +338,37 @@ Không tự ý chạy migration trên database này nếu chưa xác định rõ
 trình quản lý schema của dự án. Tránh để SQL script và EF Core cùng thay
 đổi schema theo hai hướng độc lập.
 
-## 8. Xử lý lỗi thường gặp
+## 9. Xử lý lỗi thường gặp
 
-  -----------------------------------------------------------------------
-  Hiện tượng                          Cách kiểm tra
-  ----------------------------------- -----------------------------------
-  Không tạo được database             Kiểm tra SQL Server instance và
-                                      quyền tạo database
+  ---------------------------------------------------------------------
+  Hiện tượng                         Cách kiểm tra
+  ---------------------------------- ----------------------------------
+  Không tạo được database            Kiểm tra SQL Server instance và
+                                     quyền tạo database
 
-  Bảng đã tồn tại khi chạy file 01    File 01 dành cho database mới; kiểm
-                                      tra database hiện tại trước khi
-                                      chạy lại
+  Bảng đã tồn tại khi chạy file 01   File 01 dành cho database mới;
+                                     kiểm tra database hiện tại trước
+                                     khi chạy lại
 
-  Không tìm thấy `gv01` hoặc `gv02`   Chạy backend Development và xác
-                                      nhận `DevSeeder` đã tạo tài khoản
+  Không tìm thấy `gv01` hoặc `gv02`  Chạy backend Development và xác
+                                     nhận `DevSeeder` đã tạo tài khoản
 
-  Lỗi xung đột phòng khi tạo lịch     Kiểm tra lịch hiện có cùng ngày,
-                                      phòng và khoảng thời gian
+  Lỗi xung đột phòng khi tạo lịch    Kiểm tra lịch hiện có cùng ngày,
+                                     phòng và khoảng thời gian
 
-  Lỗi trùng giờ giảng viên            Kiểm tra lịch khác của cùng giảng
-                                      viên trong ngày
+  Lỗi trùng giờ giảng viên           Kiểm tra lịch khác của cùng giảng
+                                     viên trong ngày
 
-  Chạy lại nhưng số lịch không tăng   Đây có thể là hành vi đúng vì
-                                      script bỏ qua lịch đã tồn tại theo
-                                      ngày/ca/giảng viên
+  Chạy lại nhưng số lịch không tăng  Đây có thể là hành vi đúng vì
+                                     script bỏ qua lịch đã tồn tại theo
+                                     ngày/ca/giảng viên
 
-  Backend không kết nối được          Kiểm tra server, instance,
-                                      database, authentication và
-                                      connection string
-  -----------------------------------------------------------------------
+  Backend không kết nối được         Kiểm tra server, instance,
+                                     database, authentication và
+                                     connection string
+  ---------------------------------------------------------------------
 
-## 9. Checklist triển khai
+## 10. Checklist triển khai
 
 -   [ ] Chạy thành công `01_CreateDatabase.sql`.
 -   [ ] Xác nhận database có đủ 9 bảng.
@@ -276,6 +379,8 @@ trình quản lý schema của dự án. Tránh để SQL script và EF Core cù
 -   [ ] Chạy thành công `03_SeedLichDay.sql`.
 -   [ ] Kiểm tra thống kê lịch theo từng giảng viên.
 -   [ ] Kiểm tra API backend đọc được phòng, thiết bị và lịch dạy.
+-   [ ] Kiểm thử quy tắc Check-in/Check-out theo giờ Demo tại mục 7, gồm
+    tua giờ giữa sáng/chiều và tua ngược trong Development.
 
 ------------------------------------------------------------------------
 

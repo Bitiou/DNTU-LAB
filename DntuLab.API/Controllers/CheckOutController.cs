@@ -3,6 +3,7 @@ using System.Security.Claims;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
 using DntuLab.Api.DTOs;
+using DntuLab.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,10 +16,14 @@ namespace DntuLab.Api.Controllers;
 public class CheckOutController : ControllerBase
 {
     private readonly LabDbContext _context;
+    private readonly IWebHostEnvironment _environment;
 
-    public CheckOutController(LabDbContext context)
+    public CheckOutController(
+        LabDbContext context,
+        IWebHostEnvironment environment)
     {
         _context = context;
+        _environment = environment;
     }
 
     [HttpPost]
@@ -37,90 +42,120 @@ public class CheckOutController : ControllerBase
             });
         }
 
-        await using var transaction =
-            await _context.Database.BeginTransactionAsync();
+        // Thực hiện toàn bộ transaction bên trong Execution Strategy.
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        var lich = await _context.LichDays
-            .FirstOrDefaultAsync(x => x.Id == request.LichDayId);
-
-        if (lich == null)
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            return NotFound(new
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync();
+
+            try
             {
-                success = false,
-                message = "Không tìm thấy lịch dạy."
-            });
-        }
+                var lich = await _context.LichDays
+                    .FirstOrDefaultAsync(x => x.Id == request.LichDayId);
 
-        if (lich.GiangVienId != giangVienId)
-        {
-            return Forbid();
-        }
+                if (lich == null)
+                {
+                    return NotFound(new
+                    {
+                        success = false,
+                        message = "Không tìm thấy lịch dạy."
+                    });
+                }
 
-        if (lich.TrangThai != TrangThaiLich.DangDienRa)
-        {
-            return Conflict(new
+                if (lich.GiangVienId != giangVienId)
+                {
+                    return Forbid();
+                }
+
+                if (lich.TrangThai != TrangThaiLich.DangDienRa)
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        message = "Lịch không ở trạng thái đang diễn ra."
+                    });
+                }
+
+                var nhatKy = await _context.NhatKys
+                    .FirstOrDefaultAsync(x => x.LichDayId == lich.Id);
+
+                if (nhatKy == null)
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        message = "Không tìm thấy nhật ký check-in."
+                    });
+                }
+
+                if (nhatKy.ThoiGianCheckOut.HasValue)
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        message = "Buổi học đã được check-out."
+                    });
+                }
+
+                var thoiGianDemo =
+                    DemoClock.GetNow(Request, _environment);
+
+                var mocTuDongCheckOut =
+                    lich.Ngay.ToDateTime(lich.KetThuc)
+                        .AddMinutes(30);
+
+                if (thoiGianDemo >= mocTuDongCheckOut)
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        message = "Ca học đã quá 30 phút sau giờ kết thúc và được hệ thống tự động Check-out."
+                    });
+                }
+
+                // Bắt buộc xác nhận cả hai điều kiện.
+                if (!request.DaTatDien || !request.DaKhoaCua)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Vui lòng xác nhận đã tắt điện và khóa cửa."
+                    });
+                }
+
+                // Cập nhật nhật ký Check-out.
+                nhatKy.ThoiGianCheckOut = thoiGianDemo;
+                nhatKy.DaTatDien = request.DaTatDien;
+                nhatKy.DaKhoaCua = request.DaKhoaCua;
+
+                // Cập nhật trạng thái lịch.
+                lich.TrangThai = TrangThaiLich.DaKetThuc;
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Check-out thành công.",
+                    data = new
+                    {
+                        lich.Id,
+                        lich.MaLich,
+                        lich.MaPhong,
+                        nhatKy.ThoiGianCheckOut,
+                        nhatKy.DaTatDien,
+                        nhatKy.DaKhoaCua,
+                        lich.TrangThai
+                    }
+                });
+            }
+            catch
             {
-                success = false,
-                message = "Lịch không ở trạng thái đang diễn ra."
-            });
-        }
-
-        var nhatKy = await _context.NhatKys
-            .FirstOrDefaultAsync(x => x.LichDayId == lich.Id);
-
-        if (nhatKy == null)
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Không tìm thấy nhật ký check-in."
-            });
-        }
-
-        if (nhatKy.ThoiGianCheckOut.HasValue)
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Buổi học đã được check-out."
-            });
-        }
-
-        // Chỉ lưu khi cả hai xác nhận đều hợp lệ.
-        if (!request.DaTatDien || !request.DaKhoaCua)
-        {
-            return BadRequest(new
-            {
-                success = false,
-                message = "Vui lòng xác nhận đã tắt điện và khóa cửa."
-            });
-        }
-
-        var thoiGianCheckOut = DateTime.Now;
-
-        nhatKy.ThoiGianCheckOut = thoiGianCheckOut;
-        nhatKy.DaTatDien = request.DaTatDien;
-        nhatKy.DaKhoaCua = request.DaKhoaCua;
-
-        lich.TrangThai = TrangThaiLich.DaKetThuc;
-
-        await _context.SaveChangesAsync();
-        await transaction.CommitAsync();
-
-        return Ok(new
-        {
-            success = true,
-            message = "Check-out thành công.",
-            data = new
-            {
-                lich.Id,
-                lich.MaLich,
-                lich.MaPhong,
-                nhatKy.ThoiGianCheckOut,
-                nhatKy.DaTatDien,
-                nhatKy.DaKhoaCua,
-                lich.TrangThai
+                await transaction.RollbackAsync();
+                throw;
             }
         });
     }

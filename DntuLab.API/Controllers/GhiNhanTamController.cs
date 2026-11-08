@@ -1,3 +1,4 @@
+using System;
 using System.Security.Claims;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
@@ -74,8 +75,8 @@ public class GhiNhanTamController : ControllerBase
             });
         }
 
+        // Can tracked entity vi endpoint nay cap nhat TrangThai thiet bi.
         var thietBi = await _context.ThietBis
-            .AsNoTracking()
             .FirstOrDefaultAsync(x =>
                 x.MaThietBi == request.MaThietBi &&
                 x.MaPhong == lich.MaPhong);
@@ -101,6 +102,11 @@ public class GhiNhanTamController : ControllerBase
         };
 
         _context.GhiNhanTams.Add(ghiNhan);
+
+        // Ghi nhận tạm tại cụm F phải làm thiết bị chuyển đỏ ngay trên sơ đồ.
+        // Ticket chính thức vẫn chỉ được tạo khi giảng viên bấm "Tổng hợp & gửi Ticket".
+        thietBi.TrangThai = TrangThaiThietBi.Hong;
+
         await _context.SaveChangesAsync();
 
         return CreatedAtAction(
@@ -128,36 +134,131 @@ public class GhiNhanTamController : ControllerBase
     public async Task<IActionResult> TongHop(int id)
     {
         var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(userIdValue, out var nguoiGhiId)) return Unauthorized();
+        if (!int.TryParse(userIdValue, out var nguoiGhiId))
+            return Unauthorized(new
+            {
+                success = false,
+                message = "Không xác định được tài khoản."
+            });
 
-        await using var transaction = await _context.Database.BeginTransactionAsync();
-        var ghiNhan = await _context.GhiNhanTams.FirstOrDefaultAsync(x => x.Id == id);
-        if (ghiNhan == null) return NotFound(new { success = false, message = "Không tìm thấy ghi nhận tạm." });
-        var lich = await _context.LichDays.FirstOrDefaultAsync(x => x.Id == ghiNhan.LichDayId);
-        if (lich == null) return NotFound(new { success = false, message = "Không tìm thấy lịch dạy." });
-        if (lich.GiangVienId != nguoiGhiId) return Forbid();
-        if (ghiNhan.TicketId.HasValue || ghiNhan.TrangThai == "Đã tạo Ticket")
-            return Conflict(new { success = false, message = "Ghi nhận này đã được tổng hợp thành Ticket." });
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        var thietBi = await _context.ThietBis.FirstOrDefaultAsync(x => x.MaThietBi == ghiNhan.MaThietBi);
-        if (thietBi == null) return NotFound(new { success = false, message = "Không tìm thấy thiết bị." });
-        var ticket = new TicketSuCo
+        // Khai báo kiểu rõ ràng để ExecuteAsync chọn đúng overload Task<IActionResult>.
+        Func<Task<IActionResult>> operation = async () =>
         {
-            MaThietBi = ghiNhan.MaThietBi,
-            LoaiLoi = "Sự cố thiết bị",
-            GhiChu = ghiNhan.MoTa,
-            NguoiBaoId = nguoiGhiId,
-            ThoiGianTao = DateTime.Now,
-            TrangThai = TrangThaiTicket.ChoXuLy
+            // Mỗi lần retry phải đọc lại dữ liệu mới từ database.
+            _context.ChangeTracker.Clear();
+
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync(
+                    System.Data.IsolationLevel.Serializable);
+
+            var ghiNhan = await _context.GhiNhanTams
+                .FirstOrDefaultAsync(x => x.Id == id);
+
+            if (ghiNhan == null)
+                return new NotFoundObjectResult(new
+                {
+                    success = false,
+                    message = "Không tìm thấy ghi nhận tạm."
+                });
+
+            var lich = await _context.LichDays
+                .FirstOrDefaultAsync(x => x.Id == ghiNhan.LichDayId);
+
+            if (lich == null)
+                return new NotFoundObjectResult(new
+                {
+                    success = false,
+                    message = "Không tìm thấy lịch dạy."
+                });
+
+            if (lich.GiangVienId != nguoiGhiId)
+                return new ForbidResult();
+
+            var thietBi = await _context.ThietBis
+                .FirstOrDefaultAsync(x => x.MaThietBi == ghiNhan.MaThietBi);
+
+            if (thietBi == null)
+                return new NotFoundObjectResult(new
+                {
+                    success = false,
+                    message = "Không tìm thấy thiết bị."
+                });
+
+            TicketSuCo? ticket = null;
+            var daTongHopTruocDo = ghiNhan.TicketId.HasValue ||
+                                   ghiNhan.TrangThai == "Đã tạo Ticket";
+
+            // Nếu đã có TicketId thì ưu tiên lấy đúng Ticket đã liên kết.
+            if (ghiNhan.TicketId.HasValue)
+            {
+                ticket = await _context.Tickets
+                    .FirstOrDefaultAsync(x => x.Id == ghiNhan.TicketId.Value);
+            }
+
+            // Phục hồi liên kết cho dữ liệu cũ đã đánh dấu tổng hợp nhưng thiếu TicketId.
+            if (ticket == null && daTongHopTruocDo)
+            {
+                ticket = await _context.Tickets
+                    .Where(x => x.MaThietBi == ghiNhan.MaThietBi &&
+                                x.NguoiBaoId == nguoiGhiId &&
+                                x.GhiChu == ghiNhan.MoTa)
+                    .OrderByDescending(x => x.ThoiGianTao)
+                    .FirstOrDefaultAsync();
+            }
+
+            if (ticket == null)
+            {
+                ticket = new TicketSuCo
+                {
+                    MaThietBi = ghiNhan.MaThietBi,
+                    LoaiLoi = "Sự cố thiết bị",
+                    GhiChu = ghiNhan.MoTa,
+                    NguoiBaoId = nguoiGhiId,
+                    ThoiGianTao = DateTime.Now,
+                    TrangThai = TrangThaiTicket.ChoXuLy
+                };
+
+                _context.Tickets.Add(ticket);
+
+                // Cần lưu lần đầu để lấy ID Ticket do SQL Server sinh.
+                await _context.SaveChangesAsync();
+            }
+
+            ghiNhan.TicketId = ticket.Id;
+            ghiNhan.TrangThai = "Đã tạo Ticket";
+
+            // Giữ nguyên trạng thái nghiệp vụ của KTV; đồng bộ màu thiết bị theo Ticket.
+            thietBi.TrangThai = ticket.TrangThai switch
+            {
+                TrangThaiTicket.DaKhacPhuc => TrangThaiThietBi.SanSang,
+                TrangThaiTicket.DangSuaChua or TrangThaiTicket.BaoCaoCapTren
+                    => TrangThaiThietBi.DangBaoTri,
+                _ => TrangThaiThietBi.Hong
+            };
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return new OkObjectResult(new
+            {
+                success = true,
+                alreadyAggregated = daTongHopTruocDo,
+                message = daTongHopTruocDo
+                    ? "Ghi nhận đã được tổng hợp trước đó. Đã đồng bộ lại Ticket và thiết bị."
+                    : "Đã tổng hợp thành Ticket và cập nhật trạng thái thiết bị.",
+                ghiNhanId = ghiNhan.Id,
+                lichDayId = ghiNhan.LichDayId,
+                ticketId = ticket.Id,
+                maThietBi = ghiNhan.MaThietBi,
+                trangThaiGhiNhan = ghiNhan.TrangThai,
+                trangThaiTicket = ticket.TrangThai,
+                trangThaiThietBi = thietBi.TrangThai
+            });
         };
-        _context.Tickets.Add(ticket);
-        await _context.SaveChangesAsync();
-        ghiNhan.TicketId = ticket.Id;
-        ghiNhan.TrangThai = "Đã tạo Ticket";
-        thietBi.TrangThai = TrangThaiThietBi.Hong;
-        await _context.SaveChangesAsync();
-        await transaction.CommitAsync();
-        return Ok(new { success = true, message = "Đã tổng hợp thành Ticket.", ticketId = ticket.Id });
+
+        return await strategy.ExecuteAsync(operation);
     }
 
     [HttpGet("theo-lich/{lichDayId:int}")]
@@ -200,6 +301,7 @@ public class GhiNhanTamController : ControllerBase
             .Select(x => new
             {
                 x.Id,
+                x.LichDayId,
                 x.MaGhiNhan,
                 x.MaThietBi,
                 TenThietBi = x.MaThietBi,

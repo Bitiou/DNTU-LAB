@@ -177,235 +177,240 @@ public class ImportLichExcelController : ControllerBase
                     .Trim();
             }
 
-            // Transaction để hạn chế import đồng thời gây trùng dữ liệu
-            await using var transaction =
-                await _db.Database.BeginTransactionAsync(
-                    IsolationLevel.Serializable, ct
-                );
+            // SQL Server đang bật EnableRetryOnFailure:
+            // Toàn bộ transaction phải nằm bên trong execution strategy.
+            var strategy = _db.Database.CreateExecutionStrategy();
 
-            var teachers = await _db.NguoiDungs
-                .Where(x =>
-                    x.HoatDong &&
-                    x.VaiTro == Roles.GV &&
-                    (x.TenDangNhap == "gv01" ||
-                     x.TenDangNhap == "gv02"))
-                .ToDictionaryAsync(
-                    x => x.TenDangNhap.ToLower(), ct
-                );
-
-            var rooms = await _db.Phongs
-                .Select(x => x.MaPhong)
-                .ToListAsync(ct);
-
-            var existing = await _db.LichDays
-                .AsNoTracking()
-                .ToListAsync(ct);
-
-            var parsed = new List<LichDay>();
-            var errors = new List<string>();
-            int duplicateCount = 0;
-
-            int lastRow = sheet.LastRowUsed()!.RowNumber();
-
-            for (int rowNo = 2; rowNo <= lastRow; rowNo++)
-            {
-                var row = sheet.Row(rowNo);
-
-                if (row.IsEmpty())
-                    continue;
-
-                try
+            return await strategy.ExecuteAsync<int, IActionResult>(
+                state: 0,
+                operation: async (_, _, token) =>
                 {
-                    var username =
-                        ReadCell(row, "TenDangNhapGV")
-                        .ToLowerInvariant();
+                    // Mỗi lần retry phải bắt đầu với ChangeTracker sạch.
+                    _db.ChangeTracker.Clear();
 
-                    if (!teachers.TryGetValue(username, out var teacher))
+                    await using var transaction =
+                        await _db.Database.BeginTransactionAsync(
+                            IsolationLevel.Serializable, token);
+
+                    var teachers = await _db.NguoiDungs
+                        .Where(x =>
+                            x.HoatDong &&
+                            x.VaiTro == Roles.GV &&
+                            (x.TenDangNhap == "gv01" ||
+                             x.TenDangNhap == "gv02"))
+                        .ToDictionaryAsync(
+                            x => x.TenDangNhap.ToLower(), token);
+
+                    var rooms = await _db.Phongs
+                        .Select(x => x.MaPhong)
+                        .ToListAsync(token);
+
+                    var existing = await _db.LichDays
+                        .AsNoTracking()
+                        .ToListAsync(token);
+
+                    var parsed = new List<LichDay>();
+                    var errors = new List<string>();
+                    int duplicateCount = 0;
+
+                    int lastRow = sheet.LastRowUsed()!.RowNumber();
+
+                    for (int rowNo = 2; rowNo <= lastRow; rowNo++)
                     {
-                        throw new FormatException(
-                            $"Tài khoản {username} không hợp lệ."
-                        );
+                        var row = sheet.Row(rowNo);
+
+                        if (row.IsEmpty())
+                            continue;
+
+                        try
+                        {
+                            var username =
+                                ReadCell(row, "TenDangNhapGV")
+                                .ToLowerInvariant();
+
+                            if (!teachers.TryGetValue(username, out var teacher))
+                            {
+                                throw new FormatException(
+                                    $"Tài khoản {username} không hợp lệ.");
+                            }
+
+                            var room = ReadCell(row, "MaPhong")
+                                .ToUpperInvariant();
+
+                            if (!rooms.Contains(
+                                room, StringComparer.OrdinalIgnoreCase))
+                            {
+                                throw new FormatException(
+                                    $"Phòng {room} không tồn tại.");
+                            }
+
+                            if (!TryReadDate(
+                                row.Cell(columns["Ngay"]), out var date))
+                            {
+                                throw new FormatException("Ngày không hợp lệ.");
+                            }
+
+                            if (!TryReadTime(
+                                row.Cell(columns["BatDau"]), out var start) ||
+                                !TryReadTime(
+                                    row.Cell(columns["KetThuc"]), out var endTime) ||
+                                start >= endTime)
+                            {
+                                throw new FormatException("Giờ học không hợp lệ.");
+                            }
+
+                            var shift = ReadCell(row, "Ca");
+                            var subject = ReadCell(row, "MonHoc");
+
+                            if (string.IsNullOrWhiteSpace(shift) ||
+                                shift.Length > 10)
+                            {
+                                throw new FormatException("Ca học không hợp lệ.");
+                            }
+
+                            if (string.IsNullOrWhiteSpace(subject) ||
+                                subject.Length > 150)
+                            {
+                                throw new FormatException("Môn học không hợp lệ.");
+                            }
+
+                            int sessions = 1;
+                            var sessionText = columns.ContainsKey("SoBuoi")
+                                ? ReadCell(row, "SoBuoi")
+                                : "";
+
+                            if (!string.IsNullOrWhiteSpace(sessionText) &&
+                                (!int.TryParse(sessionText, out sessions) ||
+                                 sessions < 1))
+                            {
+                                throw new FormatException(
+                                    "SoBuoi phải lớn hơn 0.");
+                            }
+
+                            // Bỏ qua lịch đã tồn tại cùng giảng viên/ngày/ca.
+                            bool duplicate = existing.Any(x =>
+                                x.GiangVienId == teacher.Id &&
+                                x.Ngay == date &&
+                                x.Ca.Equals(
+                                    shift,
+                                    StringComparison.OrdinalIgnoreCase
+                                )
+                            ) || parsed.Any(x =>
+                                x.GiangVienId == teacher.Id &&
+                                x.Ngay == date &&
+                                x.Ca.Equals(
+                                    shift,
+                                    StringComparison.OrdinalIgnoreCase
+                                )
+                            );
+
+                            if (duplicate)
+                            {
+                                duplicateCount++;
+                                continue;
+                            }
+
+                            // Kiểm tra trùng phòng.
+                            bool roomConflict = existing.Any(x =>
+                                x.Ngay == date &&
+                                x.MaPhong == room &&
+                                x.TrangThai != "Đã hủy" &&
+                                x.BatDau < endTime &&
+                                x.KetThuc > start
+                            ) || parsed.Any(x =>
+                                x.Ngay == date &&
+                                x.MaPhong == room &&
+                                x.BatDau < endTime &&
+                                x.KetThuc > start
+                            );
+
+                            if (roomConflict)
+                            {
+                                throw new FormatException(
+                                    $"Phòng {room} bị trùng lịch.");
+                            }
+
+                            // Kiểm tra trùng giờ giảng viên.
+                            bool teacherConflict = existing.Any(x =>
+                                x.Ngay == date &&
+                                x.GiangVienId == teacher.Id &&
+                                x.BatDau < endTime &&
+                                x.KetThuc > start
+                            ) || parsed.Any(x =>
+                                x.Ngay == date &&
+                                x.GiangVienId == teacher.Id &&
+                                x.BatDau < endTime &&
+                                x.KetThuc > start
+                            );
+
+                            if (teacherConflict)
+                            {
+                                throw new FormatException(
+                                    $"Giảng viên {username} bị trùng giờ.");
+                            }
+
+                            parsed.Add(new LichDay
+                            {
+                                Ngay = date,
+                                Ca = shift,
+                                BatDau = start,
+                                KetThuc = endTime,
+                                MonHoc = subject,
+                                MaPhong = room,
+                                GiangVienId = teacher.Id,
+                                TrangThai = TrangThaiLich.ChuaCheckIn,
+                                SoBuoi = sessions
+                            });
+                        }
+                        catch (FormatException ex)
+                        {
+                            errors.Add($"Dòng {rowNo}: {ex.Message}");
+                        }
                     }
 
-                    var room = ReadCell(row, "MaPhong")
-                        .ToUpperInvariant();
-
-                    if (!rooms.Contains(
-                        room, StringComparer.OrdinalIgnoreCase))
+                    // Có lỗi thì rollback, tuyệt đối không lưu một phần.
+                    if (errors.Count > 0)
                     {
-                        throw new FormatException(
-                            $"Phòng {room} không tồn tại."
-                        );
+                        await transaction.RollbackAsync(token);
+
+                        return UnprocessableEntity(new
+                        {
+                            success = false,
+                            message = "Dữ liệu không hợp lệ. Không có lịch nào được lưu.",
+                            errors,
+                            duplicateCount,
+                            importedCount = 0
+                        });
                     }
 
-                    if (!TryReadDate(
-                        row.Cell(columns["Ngay"]), out var date))
+                    if (parsed.Count == 0)
                     {
-                        throw new FormatException("Ngày không hợp lệ.");
+                        await transaction.CommitAsync(token);
+
+                        return Ok(new
+                        {
+                            success = true,
+                            message = "Không có lịch mới để import.",
+                            importedCount = 0,
+                            duplicateCount
+                        });
                     }
 
-                    if (!TryReadTime(
-                        row.Cell(columns["BatDau"]), out var start) ||
-                        !TryReadTime(
-                        row.Cell(columns["KetThuc"]), out var end) ||
-                        start >= end)
+                    _db.LichDays.AddRange(parsed);
+
+                    await _db.SaveChangesAsync(token);
+                    await transaction.CommitAsync(token);
+
+                    return Ok(new
                     {
-                        throw new FormatException("Giờ học không hợp lệ.");
-                    }
-
-                    var shift = ReadCell(row, "Ca");
-                    var subject = ReadCell(row, "MonHoc");
-
-                    if (string.IsNullOrWhiteSpace(shift) ||
-                        shift.Length > 10)
-                    {
-                        throw new FormatException("Ca học không hợp lệ.");
-                    }
-
-                    if (string.IsNullOrWhiteSpace(subject) ||
-                        subject.Length > 150)
-                    {
-                        throw new FormatException("Môn học không hợp lệ.");
-                    }
-
-                    int sessions = 1;
-                    var sessionText = columns.ContainsKey("SoBuoi")
-                        ? ReadCell(row, "SoBuoi")
-                        : "";
-
-                    if (!string.IsNullOrWhiteSpace(sessionText) &&
-                        (!int.TryParse(sessionText, out sessions) ||
-                         sessions < 1))
-                    {
-                        throw new FormatException(
-                            "SoBuoi phải lớn hơn 0."
-                        );
-                    }
-
-                    // Kiểm tra lịch đã tồn tại cùng giảng viên/ngày/ca
-                    bool duplicate = existing.Any(x =>
-                        x.GiangVienId == teacher.Id &&
-                        x.Ngay == date &&
-                        x.Ca.Equals(
-                            shift,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    ) || parsed.Any(x =>
-                        x.GiangVienId == teacher.Id &&
-                        x.Ngay == date &&
-                        x.Ca.Equals(
-                            shift,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    );
-
-                    if (duplicate)
-                    {
-                        duplicateCount++;
-                        continue;
-                    }
-
-                    // Kiểm tra trùng phòng
-                    bool roomConflict = existing.Any(x =>
-                        x.Ngay == date &&
-                        x.MaPhong == room &&
-                        x.TrangThai != "Đã hủy" &&
-                        x.BatDau < end &&
-                        x.KetThuc > start
-                    ) || parsed.Any(x =>
-                        x.Ngay == date &&
-                        x.MaPhong == room &&
-                        x.BatDau < end &&
-                        x.KetThuc > start
-                    );
-
-                    if (roomConflict)
-                    {
-                        throw new FormatException(
-                            $"Phòng {room} bị trùng lịch."
-                        );
-                    }
-
-                    // Kiểm tra trùng giờ giảng viên
-                    bool teacherConflict = existing.Any(x =>
-                        x.Ngay == date &&
-                        x.GiangVienId == teacher.Id &&
-                        x.BatDau < end &&
-                        x.KetThuc > start
-                    ) || parsed.Any(x =>
-                        x.Ngay == date &&
-                        x.GiangVienId == teacher.Id &&
-                        x.BatDau < end &&
-                        x.KetThuc > start
-                    );
-
-                    if (teacherConflict)
-                    {
-                        throw new FormatException(
-                            $"Giảng viên {username} bị trùng giờ."
-                        );
-                    }
-
-                    parsed.Add(new LichDay
-                    {
-                        Ngay = date,
-                        Ca = shift,
-                        BatDau = start,
-                        KetThuc = end,
-                        MonHoc = subject,
-                        MaPhong = room,
-                        GiangVienId = teacher.Id,
-                        TrangThai = TrangThaiLich.ChuaCheckIn,
-                        SoBuoi = sessions
+                        success = true,
+                        message = $"Đã import {parsed.Count} lịch vào SQL Server.",
+                        importedCount = parsed.Count,
+                        duplicateCount
                     });
-                }
-                catch (FormatException ex)
-                {
-                    errors.Add($"Dòng {rowNo}: {ex.Message}");
-                }
-            }
-
-            // Có lỗi thì không lưu một phần
-            if (errors.Count > 0)
-            {
-                await transaction.RollbackAsync(ct);
-
-                return UnprocessableEntity(new
-                {
-                    success = false,
-                    message = "Dữ liệu không hợp lệ. Không có lịch nào được lưu.",
-                    errors,
-                    duplicateCount,
-                    importedCount = 0
-                });
-            }
-
-            if (parsed.Count == 0)
-            {
-                await transaction.CommitAsync(ct);
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Không có lịch mới để import.",
-                    importedCount = 0,
-                    duplicateCount
-                });
-            }
-
-            // Lưu dữ liệu thật vào database
-            _db.LichDays.AddRange(parsed);
-
-            await _db.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
-
-            return Ok(new
-            {
-                success = true,
-                message = $"Đã import {parsed.Count} lịch vào SQL Server.",
-                importedCount = parsed.Count,
-                duplicateCount
-            });
+                },
+                verifySucceeded: null,
+                cancellationToken: ct);
         }
     }
 

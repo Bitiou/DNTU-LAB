@@ -18,7 +18,9 @@ phòng LAB Khoa CNTT -- DNTU.
 Database/
 ├── 01_CreateDatabase.sql
 ├── 02_SeedData.sql
-├── 03_SeedLichDay.sql
+├── 03_SeedAccounts.sql
+├── 04_SeedLichDay.sql
+├── 05_VerifyDatabase.sql
 └── README_DATABASE.md
 ```
 
@@ -30,7 +32,7 @@ Database/
     nhật dữ liệu.
 -   Backend DNTU LAB đã có cấu hình kết nối đến database `DntuLab`.
 -   Backend `DevSeeder` phải tạo tài khoản `gv01` và `gv02` trước khi
-    chạy file `03_SeedLichDay.sql`.
+    chạy file `04_SeedLichDay.sql`.
 
 > **Lưu ý:** `01_CreateDatabase.sql` dành cho database mới, chưa có các
 > bảng tương ứng. Không chạy đồng thời bộ script này với EF Core
@@ -79,34 +81,29 @@ Script có transaction, cập nhật thông tin phòng theo danh sách định
 nghĩa và kiểm tra mã phòng/thiết bị đã tồn tại để hạn chế chèn trùng khi
 chạy lại. Script không xóa thiết bị đã có.
 
-### Bước 3 -- Tạo tài khoản mẫu bằng Backend DevSeeder
+### Bước 3 -- Tạo tài khoản mẫu
 
-Khởi chạy backend trong môi trường Development để `DevSeeder` tạo dữ
-liệu tài khoản mẫu, trong đó cần có:
+Mở `03_SeedAccounts.sql` và nhấn **Execute**.
 
--   `gv01`
--   `gv02`
+Script tạo bốn tài khoản mẫu nếu chưa tồn tại:
 
-Kiểm tra tài khoản:
+- `gv01` -- Giảng viên
+- `gv02` -- Giảng viên
+- `ktv01` -- Kỹ thuật viên
+- `ql01` -- Quản lý
 
-``` sql
-USE DntuLab;
-GO
-
-SELECT Id, TenDangNhap, HoTen, VaiTro, HoatDong
-FROM dbo.NguoiDung
-WHERE LOWER(TenDangNhap) IN (N'gv01', N'gv02');
-GO
-```
-
-Nếu thiếu một trong hai tài khoản, hãy kiểm tra cấu hình và kết quả chạy
-`DevSeeder` trước khi tiếp tục.
+Script không ghi đè mật khẩu hoặc trạng thái của tài khoản đã tồn tại.
+Nếu tài khoản đã có trong database, thông tin hiện tại được giữ nguyên.
 
 ### Bước 4 -- Tạo lịch giảng dạy mẫu
 
-Mở `03_SeedLichDay.sql` và nhấn **Execute**.
+Mở `04_SeedLichDay.sql` và nhấn **Execute**.
 
-Khoảng thời gian: **20/10/2026 đến hết 30/11/2026**.
+Khoảng thời gian mục tiêu của bộ dữ liệu Demo: **20/10/2026 đến hết
+31/01/2027** (bao gồm cả tháng 12/2026 và tháng 1/2027).
+
+Lịch được tạo cho tất cả các ngày trong khoảng thời gian, theo bốn ca
+mẫu mỗi ngày. Script cần có tài khoản `gv01` và `gv02` trước khi chạy.
 
   Giảng viên   Ca     Thời gian
   ------------ ------ --------------
@@ -115,8 +112,11 @@ Khoảng thời gian: **20/10/2026 đến hết 30/11/2026**.
   GV02         Ca 2   09:30--11:30
   GV02         Ca 4   15:30--17:30
 
--   42 ngày × 4 ca/ngày = 168 ca.
--   Mỗi giảng viên có 84 ca.
+-   104 ngày × 4 ca/ngày = tối đa 416 ca nếu tạo đủ lịch cho mọi ngày.
+-   Mỗi giảng viên có tối đa 208 ca.
+-   Các con số trên là số lượng dự kiến khi database chưa có lịch trùng
+    và không phát sinh xung đột. Số lượng thực tế có thể thấp hơn nếu
+    script bỏ qua lịch đã tồn tại hoặc gặp điều kiện xung đột.
 -   Môn học và phòng học luân phiên theo danh sách trong file SQL.
 -   Lịch mới có trạng thái `Chưa check-in`.
 -   Script kiểm tra xung đột phòng và trùng giờ giảng viên trước khi
@@ -189,21 +189,22 @@ GO
 ``` sql
 SELECT
     ND.TenDangNhap,
-    COUNT(*) AS TongCa,
+    COUNT(LD.Id) AS TongCa,
     COUNT(DISTINCT LD.Ngay) AS SoNgayCoLich,
-    COUNT(*) * 2 AS TongTiet
-FROM dbo.LichDay LD
-INNER JOIN dbo.NguoiDung ND ON ND.Id = LD.GiangVienId
+    COUNT(LD.Id) * 2 AS TongTiet
+FROM dbo.NguoiDung ND
+LEFT JOIN dbo.LichDay LD ON LD.GiangVienId = ND.Id
+    AND LD.Ngay BETWEEN '20261020' AND '20270131'
 WHERE LOWER(ND.TenDangNhap) IN (N'gv01', N'gv02')
-  AND LD.Ngay BETWEEN '20261020' AND '20261130'
 GROUP BY ND.TenDangNhap
 ORDER BY ND.TenDangNhap;
 GO
 ```
 
 Nếu database chưa có lịch trùng từ trước và script tạo đủ lịch, kết quả
-mong đợi cho mỗi giảng viên là 84 ca, 42 ngày có lịch và 168 tiết (quy
-ước 2 tiết/ca theo script).
+dự kiến cho mỗi giảng viên là 208 ca, 104 ngày có lịch và 416 tiết
+(quy ước 2 tiết/ca). Dùng `COUNT(LD.Id)` để tài khoản chưa có lịch vẫn
+hiển thị với tổng ca bằng 0.
 
 ### 6.4. Xem chi tiết lịch
 
@@ -220,7 +221,7 @@ SELECT
 FROM dbo.LichDay LD
 INNER JOIN dbo.NguoiDung ND ON ND.Id = LD.GiangVienId
 WHERE LOWER(ND.TenDangNhap) IN (N'gv01', N'gv02')
-  AND LD.Ngay BETWEEN '20261020' AND '20261130'
+  AND LD.Ngay BETWEEN '20261020' AND '20270131'
 ORDER BY LD.Ngay, LD.BatDau, ND.TenDangNhap;
 GO
 ```
@@ -276,13 +277,17 @@ schema theo hai hướng độc lập.
 -   [ ] Xác nhận nhà F có 150 máy tính.
 -   [ ] Xác nhận nhà G có TV, Wi-Fi và tủ sạc laptop theo từng phòng.
 -   [ ] Xác nhận AIBOT có 6 bộ Kit Robot/STEM.
--   [ ] Chạy backend Development và xác nhận có `gv01`, `gv02`.
--   [ ] Chạy thành công `03_SeedLichDay.sql`.
--   [ ] Kiểm tra thống kê lịch theo từng giảng viên.
+-   [ ] Chạy thành công `03_SeedAccounts.sql`.
+-   [ ] Xác nhận có đủ `gv01`, `gv02`, `ktv01`, `ql01`.
+-   [ ] Chạy thành công `04_SeedLichDay.sql`.
+-   [ ] Xác nhận lịch có dữ liệu từ 20/10/2026 đến 31/01/2027.
+-   [ ] Chạy `05_VerifyDatabase.sql` và kiểm tra kết quả.
 -   [ ] Kiểm tra API backend đọc được phòng, thiết bị và lịch dạy.
 
 ------------------------------------------------------------------------
 
-**Ghi chú:** Tài liệu này mô tả bộ ba script SQL được cung cấp. Tài
-khoản `gv01`, `gv02` do Backend `DevSeeder` tạo, không được tạo bởi ba
-file SQL.
+**Ghi chú quan trọng:** README này mô tả bộ script gồm năm file SQL.
+Khoảng lịch 20/10/2026–31/01/2027 là phạm vi mục tiêu được hướng dẫn ở
+đây. Cần bảo đảm nội dung thực tế của `04_SeedLichDay.sql` cũng đã được
+mở rộng đến ngày 31/01/2027 trước khi chạy; README không tự tạo thêm
+lịch. `05_VerifyDatabase.sql` dùng để kiểm tra dữ liệu sau khi seed.

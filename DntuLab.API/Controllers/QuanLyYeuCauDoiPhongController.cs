@@ -26,8 +26,6 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
 
     // =====================================================
     // GET: Lấy danh sách yêu cầu đổi phòng
-    // GET /api/QuanLyYeuCauDoiPhong
-    // GET /api/QuanLyYeuCauDoiPhong?trangThai=Chờ duyệt
     // =====================================================
     [HttpGet]
     public async Task<IActionResult> GetAll(
@@ -72,80 +70,12 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
 
     // =====================================================
     // POST: Phê duyệt yêu cầu đổi phòng
-    // POST /api/QuanLyYeuCauDoiPhong/{id}/phe-duyet
     // =====================================================
     [HttpPost("{id:int}/phe-duyet")]
     public async Task<IActionResult> PheDuyet(
         int id,
         [FromBody] DuyetYeuCauDoiPhongRequest? request)
     {
-        await using var transaction =
-            await _context.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable);
-
-        var yeuCau = await _context.YeuCaus
-            .FirstOrDefaultAsync(x => x.Id == id);
-
-        if (yeuCau == null)
-        {
-            return NotFound(new
-            {
-                success = false,
-                message = "Không tìm thấy yêu cầu."
-            });
-        }
-
-        if (yeuCau.TrangThai != "Chờ duyệt")
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Yêu cầu không còn ở trạng thái chờ duyệt."
-            });
-        }
-
-        var lich = await _context.LichDays
-            .FirstOrDefaultAsync(x => x.Id == yeuCau.LichDayId);
-
-        if (lich == null)
-        {
-            return NotFound(new
-            {
-                success = false,
-                message = "Không tìm thấy lịch dạy."
-            });
-        }
-
-        // Kiểm tra phòng hiện tại có còn đúng với yêu cầu không.
-        if (lich.MaPhong != yeuCau.PhongCu)
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Phòng hiện tại đã thay đổi. Cần kiểm tra lại yêu cầu."
-            });
-        }
-
-        // Kiểm tra phòng mới có bị trùng lịch hay không.
-        var biTrungLich = await _context.LichDays
-            .AnyAsync(x =>
-                x.Id != lich.Id &&
-                x.Ngay == lich.Ngay &&
-                x.MaPhong == yeuCau.PhongMoi &&
-                x.BatDau < lich.KetThuc &&
-                x.KetThuc > lich.BatDau &&
-                x.TrangThai != "Đã hủy");
-
-        if (biTrungLich)
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Phòng mới bị trùng lịch sử dụng."
-            });
-        }
-
-        // Xác định người đang đăng nhập và thực hiện duyệt.
         var userIdValue = User.FindFirstValue(
             ClaimTypes.NameIdentifier);
 
@@ -158,63 +88,106 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
-        // Cập nhật phòng trong lịch dạy.
-        lich.MaPhong = yeuCau.PhongMoi;
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        // Cập nhật trạng thái yêu cầu.
-        yeuCau.TrangThai = "Đã duyệt";
-        yeuCau.NguoiDuyetId = nguoiDuyetId;
-        yeuCau.ThoiGianDuyet = DateTime.Now;
-        yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
-
-        await _context.SaveChangesAsync();
-        await transaction.CommitAsync();
-
-        return Ok(new
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            success = true,
-            message = "Đã phê duyệt và cập nhật phòng.",
-            yeuCauId = yeuCau.Id,
-            phongMoi = lich.MaPhong,
-            trangThai = yeuCau.TrangThai
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable);
+
+            var yeuCau = await _context.YeuCaus
+                .FirstOrDefaultAsync(x => x.Id == id);
+
+            if (yeuCau == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Không tìm thấy yêu cầu."
+                });
+            }
+
+            if (yeuCau.TrangThai != "Chờ duyệt")
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Yêu cầu không còn ở trạng thái chờ duyệt."
+                });
+            }
+
+            var lich = await _context.LichDays
+                .FirstOrDefaultAsync(x => x.Id == yeuCau.LichDayId);
+
+            if (lich == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Không tìm thấy lịch dạy."
+                });
+            }
+
+            if (lich.MaPhong != yeuCau.PhongCu)
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Phòng hiện tại đã thay đổi. Cần kiểm tra lại yêu cầu."
+                });
+            }
+
+            // Kiểm tra phòng mới có bị trùng lịch hay không.
+            var biTrungLich = await _context.LichDays
+                .AnyAsync(x =>
+                    x.Id != lich.Id &&
+                    x.Ngay == lich.Ngay &&
+                    x.MaPhong == yeuCau.PhongMoi &&
+                    x.BatDau < lich.KetThuc &&
+                    x.KetThuc > lich.BatDau &&
+                    x.TrangThai != "Đã hủy");
+
+            if (biTrungLich)
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Phòng mới bị trùng lịch sử dụng."
+                });
+            }
+
+            // Cập nhật phòng trong lịch dạy.
+            lich.MaPhong = yeuCau.PhongMoi;
+
+            // Cập nhật yêu cầu.
+            yeuCau.TrangThai = "Đã duyệt";
+            yeuCau.NguoiDuyetId = nguoiDuyetId;
+            yeuCau.ThoiGianDuyet = DateTime.Now;
+            yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Đã phê duyệt và cập nhật phòng.",
+                yeuCauId = yeuCau.Id,
+                phongMoi = lich.MaPhong,
+                trangThai = yeuCau.TrangThai
+            });
         });
     }
 
     // =====================================================
     // POST: Từ chối yêu cầu đổi phòng
-    // POST /api/QuanLyYeuCauDoiPhong/{id}/tu-choi
     // =====================================================
     [HttpPost("{id:int}/tu-choi")]
     public async Task<IActionResult> TuChoi(
         int id,
         [FromBody] DuyetYeuCauDoiPhongRequest? request)
     {
-        await using var transaction =
-            await _context.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable);
-
-        var yeuCau = await _context.YeuCaus
-            .FirstOrDefaultAsync(x => x.Id == id);
-
-        if (yeuCau == null)
-        {
-            return NotFound(new
-            {
-                success = false,
-                message = "Không tìm thấy yêu cầu."
-            });
-        }
-
-        if (yeuCau.TrangThai != "Chờ duyệt")
-        {
-            return Conflict(new
-            {
-                success = false,
-                message = "Yêu cầu không còn ở trạng thái chờ duyệt."
-            });
-        }
-
-        // Xác định người thực hiện từ chối.
         var userIdValue = User.FindFirstValue(
             ClaimTypes.NameIdentifier);
 
@@ -227,20 +200,50 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
             });
         }
 
-        yeuCau.TrangThai = "Từ chối";
-        yeuCau.NguoiDuyetId = nguoiDuyetId;
-        yeuCau.ThoiGianDuyet = DateTime.Now;
-        yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
+        var strategy = _context.Database.CreateExecutionStrategy();
 
-        await _context.SaveChangesAsync();
-        await transaction.CommitAsync();
-
-        return Ok(new
+        return await strategy.ExecuteAsync<IActionResult>(async () =>
         {
-            success = true,
-            message = "Đã từ chối yêu cầu đổi phòng.",
-            yeuCauId = yeuCau.Id,
-            trangThai = yeuCau.TrangThai
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable);
+
+            var yeuCau = await _context.YeuCaus
+                .FirstOrDefaultAsync(x => x.Id == id);
+
+            if (yeuCau == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Không tìm thấy yêu cầu."
+                });
+            }
+
+            if (yeuCau.TrangThai != "Chờ duyệt")
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Yêu cầu không còn ở trạng thái chờ duyệt."
+                });
+            }
+
+            yeuCau.TrangThai = "Từ chối";
+            yeuCau.NguoiDuyetId = nguoiDuyetId;
+            yeuCau.ThoiGianDuyet = DateTime.Now;
+            yeuCau.GhiChuDuyet = request?.GhiChuDuyet?.Trim();
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Đã từ chối yêu cầu đổi phòng.",
+                yeuCauId = yeuCau.Id,
+                trangThai = yeuCau.TrangThai
+            });
         });
     }
 }

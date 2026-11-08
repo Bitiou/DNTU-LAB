@@ -1,14 +1,12 @@
 
+using System.Security.Claims;
 using DntuLab.Api.Data;
+using DntuLab.Api.Domain;
+using DntuLab.Api.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using DntuLab.Api.DTOs;
-using DntuLab.Api.Domain;
-using System.Security.Claims;
-using System.Security.Claims;
-using DntuLab.Api.DTOs;
-    
+
 namespace DntuLab.Api.Controllers;
 
 [ApiController]
@@ -23,11 +21,127 @@ public class TicketController : ControllerBase
         _context = context;
     }
 
+    // Giang vien chi xem Ticket thuoc phong dang thao tac; KTV/QL co the xem tuong tu.
+    [HttpGet("phong/{maPhong}")]
+    [Authorize(Roles = "GV,KTV,QL")]
+    public async Task<IActionResult> GetByRoom(string maPhong)
+    {
+        if (string.IsNullOrWhiteSpace(maPhong))
+            return BadRequest(new { success = false, message = "Mã phòng không hợp lệ." });
+
+        var room = maPhong.Trim().ToUpperInvariant();
+
+        var tickets = await _context.Tickets
+            .AsNoTracking()
+            .Where(x => x.ThietBi.MaPhong == room)
+            .OrderByDescending(x => x.ThoiGianTao)
+            .ThenByDescending(x => x.Id)
+            .Select(x => new
+            {
+                x.Id,
+                x.MaTicket,
+                x.MaThietBi,
+                TenThietBi = x.ThietBi.Ten,
+                MaPhong = x.ThietBi.MaPhong,
+                TenNguoiBao = x.NguoiBao.HoTen,
+                x.LoaiLoi,
+                x.GhiChu,
+                x.NguoiBaoId,
+                x.ThoiGianTao,
+                x.TrangThai,
+                x.KtvXuLyId,
+                x.ThoiGianCapNhat,
+                x.ThoiGianHoanTat
+            })
+            .ToListAsync();
+
+        return Ok(new { success = true, count = tickets.Count, data = tickets });
+    }
+
     [HttpGet]
     [Authorize(Roles = "KTV,QL")]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? trangThai = null)
     {
+        // Đồng bộ ngược các trạng thái thiết bị đã tồn tại trước khi có cơ chế tự tạo Ticket.
+        // Thiết bị Hỏng -> Ticket Chờ xử lý; Đang bảo trì -> Ticket Đang sửa chữa.
+        // Chỉ tạo mới khi chưa có Ticket đang mở, tránh trùng lặp.
+        var userIdValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!int.TryParse(userIdValue, out var nguoiBaoId)) return Unauthorized();
+
+        // Thiet bi do do GhiNhanTam (cum F) chua tong hop chua duoc tao Ticket chinh thuc.
+        // Loai cac thiet bi nay khoi co che tu dong dong bo de giu dung quy trinh GV tong hop cuoi ca.
+        var maThietBiDangChoTongHop = await _context.GhiNhanTams
+            .Where(g => !g.TicketId.HasValue && g.TrangThai != "Đã tạo Ticket")
+            .Select(g => g.MaThietBi)
+            .Distinct()
+            .ToListAsync();
+
+        var devicesCanSync = await _context.ThietBis
+            .Where(d =>
+                (d.TrangThai == TrangThaiThietBi.Hong || d.TrangThai == TrangThaiThietBi.DangBaoTri) &&
+                !maThietBiDangChoTongHop.Contains(d.MaThietBi))
+            .ToListAsync();
+
+        // Thiết bị xanh/Sẵn sàng không nằm trong Kanban đang xử lý.
+        // Nếu còn Ticket mở do dữ liệu cũ, đóng Ticket để trạng thái nhất quán.
+        var readyDeviceCodes = await _context.ThietBis
+            .Where(d => d.TrangThai == TrangThaiThietBi.SanSang)
+            .Select(d => d.MaThietBi)
+            .ToListAsync();
+        var staleOpenTickets = await _context.Tickets
+            .Where(t => readyDeviceCodes.Contains(t.MaThietBi) && t.TrangThai != TrangThaiTicket.DaKhacPhuc)
+            .ToListAsync();
+        foreach (var staleTicket in staleOpenTickets)
+        {
+            staleTicket.TrangThai = TrangThaiTicket.DaKhacPhuc;
+            staleTicket.ThoiGianHoanTat ??= DateTime.Now;
+            staleTicket.ThoiGianCapNhat = DateTime.Now;
+        }
+
+        foreach (var device in devicesCanSync)
+        {
+            var targetStatus = device.TrangThai == TrangThaiThietBi.Hong
+                ? TrangThaiTicket.ChoXuLy
+                : TrangThaiTicket.DangSuaChua;
+
+            var openTicket = await _context.Tickets
+                .Where(t => t.MaThietBi == device.MaThietBi && t.TrangThai != TrangThaiTicket.DaKhacPhuc)
+                .OrderByDescending(t => t.ThoiGianTao)
+                .FirstOrDefaultAsync();
+
+            if (openTicket == null)
+            {
+                _context.Tickets.Add(new TicketSuCo
+                {
+                    MaThietBi = device.MaThietBi,
+                    LoaiLoi = device.TrangThai == TrangThaiThietBi.Hong ? "Thiết bị hỏng" : "Bảo trì thiết bị",
+                    GhiChu = "Ticket được hệ thống đồng bộ từ trạng thái thiết bị đã có.",
+                    NguoiBaoId = nguoiBaoId,
+                    ThoiGianTao = DateTime.Now,
+                    TrangThai = targetStatus,
+                    KtvXuLyId = targetStatus == TrangThaiTicket.DangSuaChua ? nguoiBaoId : null,
+                    ThoiGianCapNhat = targetStatus == TrangThaiTicket.DangSuaChua ? DateTime.Now : null
+                });
+            }
+            else if (openTicket.TrangThai != TrangThaiTicket.BaoCaoCapTren)
+            {
+                openTicket.TrangThai = targetStatus;
+                if (targetStatus == TrangThaiTicket.DangSuaChua)
+                {
+                    openTicket.KtvXuLyId ??= nguoiBaoId;
+                    openTicket.ThoiGianCapNhat ??= DateTime.Now;
+                }
+                else
+                {
+                    openTicket.KtvXuLyId = null;
+                }
+            }
+        }
+
+        if (devicesCanSync.Count > 0 || staleOpenTickets.Count > 0)
+            await _context.SaveChangesAsync();
+
         var query = _context.Tickets
             .AsNoTracking()
             .AsQueryable();
@@ -45,6 +159,8 @@ public class TicketController : ControllerBase
                 x.MaTicket,
                 x.MaThietBi,
                 TenThietBi = x.ThietBi.Ten,
+                MaPhong = x.ThietBi.MaPhong,
+                TenNguoiBao = x.NguoiBao.HoTen,
                 x.LoaiLoi,
                 x.GhiChu,
                 x.NguoiBaoId,
@@ -92,6 +208,15 @@ public class TicketController : ControllerBase
                 message = "Không tìm thấy thiết bị."
             });
         }
+
+        // KTV khong duoc tu tao su co tren thiet bi xanh; chi xu ly thiet bi da co co loi do/vang.
+        if (User.IsInRole(Roles.KTV) && thietBi.TrangThai == TrangThaiThietBi.SanSang)
+            return Conflict(new { success = false, message = "KTV chỉ được thao tác trên thiết bị màu đỏ hoặc vàng. Thiết bị màu xanh không thể tạo Ticket từ tài khoản KTV." });
+
+        var ticketDangMo = await _context.Tickets.AnyAsync(x =>
+            x.MaThietBi == request.MaThietBi && x.TrangThai != TrangThaiTicket.DaKhacPhuc);
+        if (ticketDangMo)
+            return Conflict(new { success = false, message = "Thiết bị đã có Ticket chưa hoàn tất. Không tạo Ticket trùng." });
 
         var ticket = new TicketSuCo
         {
@@ -208,7 +333,9 @@ public class TicketController : ControllerBase
         if (thietBiCapNhat != null)
         {
             thietBiCapNhat.TrangThai = request.TrangThai == TrangThaiTicket.DaKhacPhuc
-                ? TrangThaiThietBi.SanSang : TrangThaiThietBi.DangBaoTri;
+                ? TrangThaiThietBi.SanSang
+                : request.TrangThai == TrangThaiTicket.ChoXuLy
+                    ? TrangThaiThietBi.Hong : TrangThaiThietBi.DangBaoTri;
         }
         if (request.TrangThai == TrangThaiTicket.DaKhacPhuc)
             ticket.ThoiGianHoanTat = DateTime.Now;
@@ -280,7 +407,7 @@ public class TicketController : ControllerBase
             data = ticket
         });
     }
-   
+
 
     [HttpGet("loc")]
     [Authorize(Roles = "KTV,QL")]

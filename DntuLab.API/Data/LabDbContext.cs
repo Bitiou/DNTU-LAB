@@ -85,11 +85,22 @@ public class LabDbContext(DbContextOptions<LabDbContext> options) : DbContext(op
         b.Entity<ThongBao>()
             .Property(x => x.MaThongBao).HasComputedColumnSql(Code("TB"), stored: true);
 
+
         b.Entity<GhiNhanTam>(e =>
         {
-            e.ToTable(t => t.HasCheckConstraint("CK_GhiNhan_TrangThai", In("TrangThai", TrangThaiGhiNhan.ChuaTongHop, TrangThaiGhiNhan.DaTaoTicket)));
-            e.Property(x => x.MaGhiNhan).HasComputedColumnSql(Code("GN"), stored: true);
+            e.ToTable("GhiNhanTam", "dbo", t =>
+            {
+                t.HasCheckConstraint(
+                    "CK_GhiNhan_TrangThai",
+                    In("TrangThai",
+                        TrangThaiGhiNhan.ChuaTongHop,
+                        TrangThaiGhiNhan.DaTaoTicket));
+            });
+
+            e.Property(x => x.MaGhiNhan)
+                .HasComputedColumnSql(Code("GN"), stored: true);
         });
+
 
         // Không cascade delete: dữ liệu vận hành (nhật ký, ticket) không mất theo khi xóa dữ liệu gốc.
         foreach (var fk in b.Model.GetEntityTypes().SelectMany(t => t.GetForeignKeys()))
