@@ -1,4 +1,6 @@
-﻿
+using System.ComponentModel.DataAnnotations.Schema;
+
+
 namespace DntuLab.Api.Domain;
 
 public class GhiNhanTam
@@ -15,6 +17,7 @@ public class GhiNhanTam
 
     public int NguoiGhiId { get; set; }
 
+    [Column(TypeName = "timestamp with time zone")]
     public DateTime ThoiGian { get; set; }
 
     public string TrangThai { get; set; } = string.Empty;

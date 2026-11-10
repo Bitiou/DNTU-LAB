@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace DntuLab.Api.Services;
 
 /// <summary>
-/// Đảm bảo Trung tâm AIBOT và 6 bộ KIT là dữ liệu thật trong SQL Server.
+/// Đảm bảo Trung tâm AIBOT và 6 bộ KIT là dữ liệu thật trong PostgreSQL.
 /// Không tạo dữ liệu giả ở frontend và không ghi đè trạng thái KIT đã tồn tại.
 /// </summary>
 public sealed class AibotProvisioningService
@@ -21,9 +21,15 @@ public sealed class AibotProvisioningService
         await ProvisionLock.WaitAsync(cancellationToken);
         try
         {
-        // Serializable + khóa trong process tránh hai GET song song cùng tạo phòng/KIT.
-        await using var transaction = await _db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken);
+        var strategy = _db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            // Mỗi lần retry đọc lại trạng thái mới từ PostgreSQL.
+            _db.ChangeTracker.Clear();
+
+            // Serializable + khóa trong process tránh hai GET song song cùng tạo phòng/KIT.
+            await using var transaction = await _db.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
 
         var room = await _db.Phongs
             .FirstOrDefaultAsync(x => x.MaPhong == CumPhong.AIBOT, cancellationToken);
@@ -85,6 +91,7 @@ public sealed class AibotProvisioningService
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+            });
         }
         finally
         {

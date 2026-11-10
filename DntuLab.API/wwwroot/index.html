@@ -2114,12 +2114,28 @@ function App() {
 
   const resetDemo = async () => {
     if (!["GV", "KTV", "QL"].includes(currentUser?.vaiTro)) { notify("Tài khoản không có quyền Reset Demo.", "warn"); return; }
-    if (!window.confirm("Reset Demo sẽ khôi phục thiết bị và tạo sẵn Ticket lỗi mẫu (đỏ/vàng), đồng thời xóa Ticket demo cũ. Tiếp tục?")) return;
+    if (!window.confirm("Reset Demo sẽ đưa đồng hồ về ngày giờ thực Việt Nam, khôi phục thiết bị, tạo lại Ticket lỗi mẫu và các yêu cầu đổi phòng mẫu. Tiếp tục?")) return;
     try {
       const result = await apiFetch("/api/Database/reset-demo", { method: "POST" }, token);
+
+      // Reset timeline về thời gian thực Việt Nam do backend trả về (ISO date + HH:mm).
+      // Không reload trang để tránh state cũ của đồng hồ Demo được giữ lại.
+      if (result.currentVietnamDate) setSystemDate(result.currentVietnamDate);
+      if (result.currentVietnamTime) {
+        setSystemTime(result.currentVietnamTime);
+        setCustomTime(result.currentVietnamTime);
+      }
+
+      // Xóa snapshot cũ và tải lại thiết bị, lịch, nhật ký, Ticket,
+      // yêu cầu đổi phòng và thông báo trực tiếp từ PostgreSQL.
       ["dntu_lab_data_initialized","dntu_lab_phong","dntu_lab_thietbi","dntu_lab_lich","dntu_lab_nhatky"].forEach(k => localStorage.removeItem(k));
-      window.alert(result.message || "Đã Reset Demo thành công.");
-      window.location.reload();
+      await loadApiData(token, currentUser.vaiTro);
+      window.alert(
+        (result.message || "Đã Reset Demo thành công.") +
+        `\\nNgày giờ đã khôi phục: ${result.currentVietnamDate || "hiện tại"} ${result.currentVietnamTime || ""}` +
+        `\\nTicket mẫu: ${result.ticketCount ?? 0}` +
+        `\\nĐơn đổi phòng mẫu: ${result.roomChangeRequestsSeeded ?? 0}`
+      );
     } catch (e) { notify(e.message || "Không thể Reset Demo.", "error"); }
   };
   const S = { systemDate, dsPhong, dsThietBi, setDsThietBi, dsLich, setDsLich, dsNhatKy, setDsNhatKy, dsTicket, setDsTicket, dsYeuCau, setDsYeuCau, dsThongBao, setDsThongBao, dsGhiNhanTam, setDsGhiNhanTam, systemTime, notify, gv: currentUser?.hoTen || ACTORS.gv.ten, token, currentUser, loadApiData };
@@ -2187,7 +2203,7 @@ function App() {
               ))}
               <input aria-label="Giờ kiểm thử tùy chỉnh" type="time" value={customTime} onChange={e => setCustomTime(e.target.value)} className="rounded px-2 py-1 text-sm text-stone-900" />
               <button onClick={() => setSystemTime(customTime)} className="px-2.5 py-1 rounded-md text-sm bg-white text-[#8B0000] font-semibold">Áp dụng giờ</button>
-              <button onClick={resetDemo} disabled={!(["GV", "KTV", "QL"].includes(currentUser?.vaiTro))} title="Khôi phục dữ liệu demo thiết bị và Ticket" className="px-2.5 py-1 rounded-md text-sm border border-white hover:bg-white hover:text-[#8B0000]">Reset demo</button>
+              <button onClick={resetDemo} disabled={!(["GV", "KTV", "QL"].includes(currentUser?.vaiTro))} title="Khôi phục ngày giờ thực, thiết bị, Ticket và yêu cầu đổi phòng mẫu" className="px-2.5 py-1 rounded-md text-sm border border-white hover:bg-white hover:text-[#8B0000]">Reset demo</button>
 
             </div>
 

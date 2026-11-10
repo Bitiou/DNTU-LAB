@@ -120,8 +120,7 @@ public class LichDay
     [Range(1, int.MaxValue)]
     public int SoBuoi { get; set; } = 1;                   // số buổi/tuần (UC14)
 
-    [Timestamp]
-    public byte[] RowVersion { get; set; } = null!;
+    public uint RowVersion { get; set; }
 
     [ForeignKey(nameof(MaPhong))]
     [InverseProperty(nameof(Domain.Phong.LichDays))]
@@ -148,7 +147,7 @@ public class NhatKyCheckIn
 
     public int LichDayId { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime ThoiGianCheckIn { get; set; }
 
     public bool CheckInMuon { get; set; }
@@ -156,7 +155,7 @@ public class NhatKyCheckIn
     [Range(0, int.MaxValue)]
     public int SoPhutTre { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime? ThoiGianCheckOut { get; set; }
 
     public bool? DaTatDien { get; set; }
@@ -191,7 +190,7 @@ public class TicketSuCo
 
     public int NguoiBaoId { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime ThoiGianTao { get; set; }
 
     [Required, StringLength(20)]
@@ -199,10 +198,10 @@ public class TicketSuCo
 
     public int? KtvXuLyId { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime? ThoiGianCapNhat { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime? ThoiGianHoanTat { get; set; }
 
     [ForeignKey(nameof(MaThietBi))]
@@ -245,19 +244,18 @@ public class YeuCauDoiPhong
     [Required, StringLength(20)]
     public string TrangThai { get; set; } = TrangThaiYeuCau.ChoDuyet;
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime ThoiGianTao { get; set; }
 
     public int? NguoiDuyetId { get; set; }
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime? ThoiGianDuyet { get; set; }
 
     [StringLength(500)]
     public string? GhiChuDuyet { get; set; }
 
-    [Timestamp]
-    public byte[] RowVersion { get; set; } = null!;        // chặn nhiều QL duyệt/từ chối cùng lúc
+    public uint RowVersion { get; set; }        // chặn nhiều QL duyệt/từ chối cùng lúc
 
     [ForeignKey(nameof(LichDayId))]
     public LichDay LichDay { get; set; } = null!;
@@ -300,7 +298,7 @@ public class ThongBao
     [Required, StringLength(1000)]
     public string NoiDung { get; set; } = null!;
 
-    [Column(TypeName = "datetime2(0)")]
+    [Column(TypeName = "timestamp(0) without time zone")]
     public DateTime ThoiGian { get; set; }
 
     [Required, StringLength(30)]

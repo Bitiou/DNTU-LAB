@@ -36,7 +36,8 @@ public class TuDongDongCaController : ControllerBase
     /// - Tại BatDau + 30 phút: tự Check-in muộn nếu chưa có nhật ký.
     /// - Có Check-in, chưa Check-out: Đang diễn ra.
     /// - Tại KetThuc + 30 phút: tự Check-out, không xác nhận tắt điện/khóa cửa.
-    /// - Chỉ hoàn tác nhật ký tự động trong Development khi tua ngược.
+    /// - Trong Development, Demo là timeline có thể tua: hoàn tác mọi Check-in/Check-out
+    ///   nằm tại hoặc sau thời điểm đang chọn, kể cả thao tác thủ công.
     /// </summary>
     [HttpPost("tu-dong-checkin-checkout")]
     public async Task<IActionResult> TuDongCheckInCheckOut(
@@ -73,28 +74,27 @@ public class TuDongDongCaController : ControllerBase
                 var autoCheckOuts = 0;
                 var revertedCheckIns = 0;
                 var revertedCheckOuts = 0;
+                var originalStatuses = schedules.ToDictionary(x => x.Id, x => x.TrangThai);
 
                 foreach (var lesson in schedules)
                 {
                     var startAt = lesson.Ngay.ToDateTime(lesson.BatDau);
                     var endAt = lesson.Ngay.ToDateTime(lesson.KetThuc);
+                    // Cửa sổ Check-in thủ công: [BatDau - 30 phút, BatDau + 30 phút).
+                    // Đến đúng BatDau + 30 phút, nếu chưa có nhật ký thì tự Check-in muộn.
                     var autoCheckInAt = startAt.Add(TuDongCheckInSau);
+                    // Tự kết thúc ca đúng tại KetThuc + 30 phút.
                     var autoCheckOutAt = endAt.Add(GiaHanCheckOut);
                     var log = lesson.NhatKy;
 
                     if (log != null && _environment.IsDevelopment())
                     {
-                        // Chỉ hoàn tác Check-in được hệ thống tự tạo đúng mốc +30 phút.
-                        // Không xóa Check-in thủ công.
-                        var isAutoCheckIn =
-                            log.CheckInMuon &&
-                            log.SoPhutTre == 30 &&
-                            log.ThoiGianCheckIn == autoCheckInAt;
-
-                        if (isAutoCheckIn &&
-                            now < autoCheckInAt &&
-                            !log.DaTatDien.HasValue &&
-                            !log.DaKhoaCua.HasValue)
+                        // Demo time is a reversible timeline. Any Check-in event at or
+                        // after the selected instant belongs to the future of this view.
+                        // Remove it regardless of whether it was manual or automatic.
+                        // Equality is intentional: rewinding to exactly 07:05 restores
+                        // the state before the Check-in performed at 07:05.
+                        if (now <= log.ThoiGianCheckIn)
                         {
                             _context.NhatKys.Remove(log);
                             lesson.NhatKy = null;
@@ -102,21 +102,17 @@ public class TuDongDongCaController : ControllerBase
                             lesson.TrangThai = TrangThaiLich.ChuaCheckIn;
                             revertedCheckIns++;
                         }
-                        else
+                        else if (log.ThoiGianCheckOut.HasValue &&
+                                 now <= log.ThoiGianCheckOut.Value)
                         {
-                            // Chỉ hoàn tác Check-out tự động tại đúng mốc KetThuc +30,
-                            // nhận diện bằng hai xác nhận vật lý đều NULL.
-                            var isAutoCheckOut =
-                                log.ThoiGianCheckOut == autoCheckOutAt &&
-                                !log.DaTatDien.HasValue &&
-                                !log.DaKhoaCua.HasValue;
-
-                            if (isAutoCheckOut && now < autoCheckOutAt)
-                            {
-                                log.ThoiGianCheckOut = null;
-                                lesson.TrangThai = TrangThaiLich.DangDienRa;
-                                revertedCheckOuts++;
-                            }
+                            // The Check-in happened in the past, but Check-out is at
+                            // or after the selected Demo instant. Rewind only the
+                            // Check-out, retaining the earlier Check-in event.
+                            log.ThoiGianCheckOut = null;
+                            log.DaTatDien = null;
+                            log.DaKhoaCua = null;
+                            lesson.TrangThai = TrangThaiLich.DangDienRa;
+                            revertedCheckOuts++;
                         }
                     }
 
@@ -175,10 +171,15 @@ public class TuDongDongCaController : ControllerBase
                     }
                 }
 
+                // Lưu cả trường hợp tua ngược làm thay đổi TrangThai của nhật ký thủ công
+                // (ví dụ tua về trước thời điểm Check-in/Check-out đã ghi nhận).
+                var trangThaiChanged = schedules.Any(x => originalStatuses[x.Id] != x.TrangThai);
+
                 if (autoCheckIns > 0 ||
                     autoCheckOuts > 0 ||
                     revertedCheckIns > 0 ||
-                    revertedCheckOuts > 0)
+                    revertedCheckOuts > 0 ||
+                    trangThaiChanged)
                 {
                     await _context.SaveChangesAsync(cancellationToken);
                 }
@@ -205,8 +206,11 @@ public class TuDongDongCaController : ControllerBase
                     $"hoàn tác Check-out tự động: {result.RevertedCheckOuts}.",
                 thoiGianDemo = result.Now,
                 cuaSoCheckInTruocPhut = 30,
-                tuDongCheckInSauPhut = 30,
+                cuaSoCheckInSauPhut = 30,
+                mocMoCheckIn = "BatDau - 30 phút",
+                mocDongCheckIn = "BatDau + 30 phút (đóng cửa sổ Check-in thủ công và tự Check-in muộn nếu chưa có nhật ký)",
                 giaHanCheckOutPhut = 30,
+                mocTuDongKetThuc = "KetThuc + 30 phút",
                 soCaTuDongCheckIn = result.AutoCheckIns,
                 soCaTuDongCheckOut = result.AutoCheckOuts,
                 soCaHoanTacCheckIn = result.RevertedCheckIns,

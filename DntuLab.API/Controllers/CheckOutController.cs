@@ -1,4 +1,4 @@
-﻿
+
 using System.Security.Claims;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
@@ -90,17 +90,29 @@ public class CheckOutController : ControllerBase
                     });
                 }
 
-                if (nhatKy.ThoiGianCheckOut.HasValue)
-                {
-                    return Conflict(new
-                    {
-                        success = false,
-                        message = "Buổi học đã được check-out."
-                    });
-                }
-
                 var thoiGianDemo =
                     DemoClock.GetNow(Request, _environment);
+
+                if (nhatKy.ThoiGianCheckOut.HasValue)
+                {
+                    // Khi tua ngược trong Development về trước một Check-out thủ công,
+                    // bỏ mốc Check-out tương lai để ca có thể tiếp tục và Check-out lại.
+                    if (_environment.IsDevelopment() &&
+                        nhatKy.ThoiGianCheckOut.Value >= thoiGianDemo)
+                    {
+                        nhatKy.ThoiGianCheckOut = null;
+                        nhatKy.DaTatDien = null;
+                        nhatKy.DaKhoaCua = null;
+                    }
+                    else
+                    {
+                        return Conflict(new
+                        {
+                            success = false,
+                            message = "Buổi học đã được check-out."
+                        });
+                    }
+                }
 
                 var mocTuDongCheckOut =
                     lich.Ngay.ToDateTime(lich.KetThuc)

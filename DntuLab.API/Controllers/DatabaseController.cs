@@ -29,7 +29,7 @@ public class DatabaseController : ControllerBase
 
         var devices = await _context.ThietBis.OrderBy(x => x.MaThietBi).ToListAsync();
         if (devices.Count == 0)
-            return Conflict(new { success = false, message = "Chua co danh muc thiet bi trong SQL Server. Hay nap du lieu phong/thiet bi truoc." });
+            return Conflict(new { success = false, message = "Chua co danh muc thiet bi trong PostgreSQL. Hay nap du lieu phong/thiet bi truoc." });
 
         // EnableRetryOnFailure yeu cau transaction tu tao phai chay ben trong execution strategy.
         // Dung generic IActionResult de lambda co kieu Task<IActionResult>, tranh loi async lambda Task.
@@ -46,14 +46,14 @@ public class DatabaseController : ControllerBase
             TimeZoneInfo vietnamZone;
             try { vietnamZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time"); }
             catch (TimeZoneNotFoundException) { vietnamZone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Ho_Chi_Minh"); }
-            var realNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vietnamZone);
+            var realNowOffset = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, vietnamZone);
+            var realNow = realNowOffset.DateTime;
             var realToday = DateOnly.FromDateTime(realNow);
             var realTime = TimeOnly.FromDateTime(realNow);
 
-            // Du lieu lich co dinh cua demo chi den het thang 01/2027.
-            // Cac lich tu Excel duoc import tu thang 02/2027 tro di se bi xoa
-            // moi khi Reset Demo, de database tro lai bo lich goc.
-            var importScheduleStart = new DateOnly(2027, 2, 1);
+            // Lich co dinh theo bo seed PostgreSQL hien tai: 20/10/2026 - 30/11/2026.
+            // Lich import tu Excel bat dau tu 01/12/2026 tro di se duoc xoa khi Reset.
+            var importScheduleStart = new DateOnly(2026, 12, 1);
             var importedScheduleIds = await _context.LichDays
                 .Where(x => x.Ngay >= importScheduleStart)
                 .Select(x => x.Id)
@@ -149,29 +149,24 @@ public class DatabaseController : ControllerBase
                 .Where(p => p.Cum == CumPhong.F || p.Cum == CumPhong.G)
                 .OrderBy(p => p.MaPhong)
                 .ToListAsync();
-            // Bo du lieu demo UC11-12 chi lay tu lich co dinh THANG 01/2027
-            // (lich mau trong file import cua nguoi dung bat dau tu 04/01/2027).
-            // Khong lay cac ca thang 11/2026 de tranh tao request tren lich dang kiem thu.
+            // Chon lich co dinh trong khoang seed thuc te (20/10 - 30/11/2026).
+            // Chi tao mau tren cac ca chua dien ra theo gio thuc Viet Nam.
+            var fixedScheduleFrom = new DateOnly(2026, 10, 20);
+            var fixedScheduleThrough = new DateOnly(2026, 11, 30);
             var demoLessons = await _context.LichDays
-                .Where(l => l.Ngay >= new DateOnly(2027, 1, 1) &&
-                            l.Ngay <= new DateOnly(2027, 1, 31) &&
-                            (l.MaPhong.StartsWith("F") || l.MaPhong.StartsWith("G")))
+                .Where(l => l.Ngay >= fixedScheduleFrom &&
+                            l.Ngay <= fixedScheduleThrough &&
+                            (l.MaPhong.StartsWith("F") || l.MaPhong.StartsWith("G")) &&
+                            (l.Ngay > realToday ||
+                             (l.Ngay == realToday && l.BatDau > realTime)))
                 .OrderBy(l => l.Ngay).ThenBy(l => l.BatDau).ToListAsync();
 
             var seededRoomRequests = 0;
             var seededAuditNotifications = 0;
             var usedLessonIds = new HashSet<int>();
 
-            if (demoLessons.Count == 0)
-            {
-                await tx.RollbackAsync();
-                return Conflict(new
-                {
-                    success = false,
-                    message = "Khong tim thay lich co dinh thang 01/2027 thuoc cum F/G de tao du lieu mau UC11-UC12. Hay kiem tra lich goc trong SQL Server.",
-                    fixedScheduleThrough = "31/01/2027"
-                });
-            }
+            // Neu khong con ca F/G tuong lai trong khoang seed, van hoan tat reset
+            // thiet bi/Ticket va attendance. Chi bo qua phan tao yeu cau doi phong mau.
 
             string? FindAvailableRoom(LichDay lesson)
             {
@@ -225,7 +220,7 @@ public class DatabaseController : ControllerBase
             // Hai yêu cầu khẩn cấp: chọn ca sáng, cập nhật phòng như nghiệp vụ thật
             // và tạo thông báo để QL hậu kiểm sau 08:00.
             foreach (var lesson in demoLessons
-                .Where(x => x.Ngay >= realToday && x.BatDau < new TimeOnly(8, 0) && !usedLessonIds.Contains(x.Id))
+                .Where(x => x.BatDau < new TimeOnly(8, 0) && !usedLessonIds.Contains(x.Id))
                 .Take(2))
             {
                 var targetRoom = FindAvailableRoom(lesson);
@@ -276,7 +271,7 @@ public class DatabaseController : ControllerBase
                 .Select(x => (int?)x.Id)
                 .FirstOrDefaultAsync();
 
-            // Chon thiet bi CO THAT trong SQL Server theo loai va phong; khong tao ma thiet bi gia.
+            // Chon thiet bi CO THAT trong PostgreSQL theo loai va phong; khong tao ma thiet bi gia.
             var seed = new List<(ThietBi Device, string LoaiLoi, string GhiChu, string TrangThaiThietBi, string TrangThaiTicket)>();
             void AddSeed(string loai, int count, string loaiLoi, string ghiChu, bool firstRed)
             {
@@ -320,10 +315,10 @@ public class DatabaseController : ControllerBase
                     LoaiLoi = item.LoaiLoi,
                     GhiChu = item.GhiChu,
                     NguoiBaoId = userId,
-                    ThoiGianTao = DateTime.Now,
+                    ThoiGianTao = realNow,
                     TrangThai = item.TrangThaiTicket,
                     KtvXuLyId = item.TrangThaiTicket == TrangThaiTicket.DangSuaChua ? (ktvUserId ?? userId) : null,
-                    ThoiGianCapNhat = item.TrangThaiTicket == TrangThaiTicket.DangSuaChua ? DateTime.Now : null
+                    ThoiGianCapNhat = item.TrangThaiTicket == TrangThaiTicket.DangSuaChua ? realNow : null
                 });
                 seeded++;
             }
@@ -351,7 +346,11 @@ public class DatabaseController : ControllerBase
                 oldRoomNotificationsDeleted = oldRoomNotifications.Count,
                 importedTemporaryNotesDeleted = importedTemporaryNotes.Count,
                 totalTemporaryNotesDeleted = allTemporaryNotes.Count,
-                fixedScheduleThrough = "31/01/2027",
+                fixedScheduleFrom = fixedScheduleFrom.ToString("dd/MM/yyyy"),
+                fixedScheduleThrough = fixedScheduleThrough.ToString("dd/MM/yyyy"),
+                currentVietnamDate = realNow.ToString("yyyy-MM-dd"),
+                currentVietnamTime = realNow.ToString("HH:mm"),
+                currentVietnamDateTime = realNowOffset.ToString("yyyy-MM-dd'T'HH:mm:sszzz"),
                 redCount = seed.Count(x => x.TrangThaiThietBi == TrangThaiThietBi.Hong),
                 yellowCount = seed.Count(x => x.TrangThaiThietBi == TrangThaiThietBi.DangBaoTri)
             });
@@ -378,7 +377,7 @@ public class DatabaseController : ControllerBase
             return Ok(new
             {
                 success = true,
-                message = "Kết nối SQL Server thành công!",
+                message = "Kết nối PostgreSQL thành công!",
                 database = _context.Database
                     .GetDbConnection().Database
             });

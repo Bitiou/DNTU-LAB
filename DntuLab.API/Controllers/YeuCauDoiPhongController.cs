@@ -1,4 +1,4 @@
-﻿
+
 using System.Security.Claims;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;

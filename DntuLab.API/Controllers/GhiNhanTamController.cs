@@ -96,7 +96,7 @@ public class GhiNhanTamController : ControllerBase
             MaThietBi = thietBi.MaThietBi,
             MoTa = request.MoTa.Trim(),
             NguoiGhiId = nguoiGhiId,
-            ThoiGian = DateTime.Now,
+            ThoiGian = DateTime.UtcNow,
             TrangThai = "Chưa tổng hợp",
             TicketId = null
         };
@@ -222,7 +222,7 @@ public class GhiNhanTamController : ControllerBase
 
                 _context.Tickets.Add(ticket);
 
-                // Cần lưu lần đầu để lấy ID Ticket do SQL Server sinh.
+                // Cần lưu lần đầu để lấy ID Ticket do PostgreSQL sinh.
                 await _context.SaveChangesAsync();
             }
 

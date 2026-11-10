@@ -6,7 +6,7 @@ using Microsoft.OpenApi.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.Data.SqlClient;
+using Npgsql;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -57,7 +57,7 @@ builder.Services
     });
 
 // ======================================================
-// 3. CẤU HÌNH DATABASE SQL SERVER
+// 3. CẤU HÌNH DATABASE POSTGRESQL
 // ======================================================
 
 var connectionString =
@@ -66,11 +66,15 @@ var connectionString =
 if (!string.IsNullOrWhiteSpace(connectionString))
 {
     builder.Services.AddDbContext<LabDbContext>(options =>
-        options.UseSqlServer(connectionString, sqlOptions =>
-            sqlOptions.EnableRetryOnFailure(
-                maxRetryCount: 5,
-                maxRetryDelay: TimeSpan.FromSeconds(5),
-                errorNumbersToAdd: new[] { 1205 })));
+        options.UseNpgsql(
+    connectionString,
+    npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
+        maxRetryCount: 5,
+        maxRetryDelay: TimeSpan.FromSeconds(30),
+        errorCodesToAdd: null
+    )
+    )
+);
 }
 else
 {
@@ -129,8 +133,7 @@ var app = builder.Build();
 // ======================================================
 
 // Chỉ thực hiện Seeder khi cấu hình bật.
-// Tránh ứng dụng bị lỗi khởi động do SQL Server local
-// không thể truy cập từ Render.
+// Chỉ bật khi database PostgreSQL đã được tạo schema và cần seed tài khoản mẫu.
 
 var seedEnabled = builder.Configuration.GetValue<bool>(
     "Database:SeedOnStartup");
@@ -211,11 +214,11 @@ if (seedEnabled)
         app.Logger.LogInformation(
             "Khởi tạo tài khoản mẫu thành công.");
     }
-    catch (SqlException ex)
+    catch (NpgsqlException ex)
     {
         app.Logger.LogError(
             ex,
-            "Không thể kết nối SQL Server để chạy Seeder.");
+            "Không thể kết nối PostgreSQL để chạy Seeder.");
     }
 }
 

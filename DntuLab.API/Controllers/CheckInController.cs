@@ -125,18 +125,30 @@ public class CheckInController : ControllerBase
                 });
             }
 
-            var daCheckIn = await _context.NhatKys
-                .AnyAsync(
+            var nhatKyHienTai = await _context.NhatKys
+                .FirstOrDefaultAsync(
                     x => x.LichDayId == lich.Id,
                     cancellationToken);
 
-            if (daCheckIn)
+            if (nhatKyHienTai != null)
             {
-                return Conflict(new
+                // Trong Demo/Development, khi tua ngược về trước một Check-in thủ công,
+                // nhật ký tương lai không được khóa nút Check-in của thời điểm hiện tại.
+                // Chỉ thay thế nhật ký có thời điểm Check-in nằm sau giờ Demo đang chọn.
+                if (environment.IsDevelopment() &&
+                    nhatKyHienTai.ThoiGianCheckIn >= hienTai)
                 {
-                    success = false,
-                    message = "Lịch này đã có nhật ký check-in."
-                });
+                    _context.NhatKys.Remove(nhatKyHienTai);
+                    await _context.SaveChangesAsync(cancellationToken);
+                }
+                else
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        message = "Lịch này đã có nhật ký check-in."
+                    });
+                }
             }
 
             var batDauDateTime = lich.Ngay.ToDateTime(lich.BatDau);

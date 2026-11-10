@@ -1,4 +1,4 @@
-﻿
+
 using ClosedXML.Excel;
 using DntuLab.Api.Data;
 using DntuLab.Api.Domain;
@@ -68,7 +68,7 @@ public class ImportLichExcelController : ControllerBase
     }
 
     // POST: api/ImportLichExcel
-    // Đọc Excel và lưu vào SQL Server
+    // Đọc Excel và lưu vào PostgreSQL
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(MaxFileSize)]
@@ -177,7 +177,7 @@ public class ImportLichExcelController : ControllerBase
                     .Trim();
             }
 
-            // SQL Server đang bật EnableRetryOnFailure:
+            // PostgreSQL đang bật EnableRetryOnFailure:
             // Toàn bộ transaction phải nằm bên trong execution strategy.
             var strategy = _db.Database.CreateExecutionStrategy();
 
@@ -404,7 +404,7 @@ public class ImportLichExcelController : ControllerBase
                     return Ok(new
                     {
                         success = true,
-                        message = $"Đã import {parsed.Count} lịch vào SQL Server.",
+                        message = $"Đã import {parsed.Count} lịch vào PostgreSQL.",
                         importedCount = parsed.Count,
                         duplicateCount
                     });
