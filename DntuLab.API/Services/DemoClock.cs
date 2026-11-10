@@ -3,16 +3,15 @@ using Microsoft.AspNetCore.Http;
 
 namespace DntuLab.Api.Services;
 
-/// <summary>Dong ho kiem thu chi hoat dong trong Development.
-/// Header: X-Debug-Date (yyyy-MM-dd), X-Debug-Time (HH:mm).
+/// <summary>Dong ho Demo dung cho ca moi truong Development va Production.
+/// Frontend gui X-Debug-Date (yyyy-MM-dd), X-Debug-Time (HH:mm).
+/// Cac endpoint su dung dong ho nay deu can xac thuc/phan quyen.
 /// </summary>
 public static class DemoClock
 {
     public static DateTime GetNow(HttpRequest request, IWebHostEnvironment environment)
     {
         var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, GetVietnamTimeZone());
-        if (!environment.IsDevelopment()) return now;
-
         var date = now.Date;
         var time = TimeOnly.FromDateTime(now);
         if (request.Headers.TryGetValue("X-Debug-Date", out var dateHeader) &&

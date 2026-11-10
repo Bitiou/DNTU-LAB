@@ -87,14 +87,12 @@ public class TuDongDongCaController : ControllerBase
                     var autoCheckOutAt = endAt.Add(GiaHanCheckOut);
                     var log = lesson.NhatKy;
 
-                    if (log != null && _environment.IsDevelopment())
+                    if (log != null)
                     {
-                        // Demo time is a reversible timeline. Any Check-in event at or
-                        // after the selected instant belongs to the future of this view.
-                        // Remove it regardless of whether it was manual or automatic.
-                        // Equality is intentional: rewinding to exactly 07:05 restores
-                        // the state before the Check-in performed at 07:05.
-                        if (now <= log.ThoiGianCheckIn)
+                        // Demo timeline co the tua lui/tiến tren ca Development va Production.
+                        // Tai dung timestamp Check-in thi giu lai nhat ky; chi tua ve truoc
+                        // timestamp moi hoan tac su kien Check-in.
+                        if (now < log.ThoiGianCheckIn)
                         {
                             _context.NhatKys.Remove(log);
                             lesson.NhatKy = null;
@@ -103,11 +101,10 @@ public class TuDongDongCaController : ControllerBase
                             revertedCheckIns++;
                         }
                         else if (log.ThoiGianCheckOut.HasValue &&
-                                 now <= log.ThoiGianCheckOut.Value)
+                                 now < log.ThoiGianCheckOut.Value)
                         {
-                            // The Check-in happened in the past, but Check-out is at
-                            // or after the selected Demo instant. Rewind only the
-                            // Check-out, retaining the earlier Check-in event.
+                            // Check-in van nam trong qua khu, nhung Check-out o tuong lai
+                            // so voi moc Demo dang chon. Chi hoan tac Check-out.
                             log.ThoiGianCheckOut = null;
                             log.DaTatDien = null;
                             log.DaKhoaCua = null;

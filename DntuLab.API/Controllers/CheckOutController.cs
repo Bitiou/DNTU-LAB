@@ -98,7 +98,7 @@ public class CheckOutController : ControllerBase
                     // Khi tua ngược trong Development về trước một Check-out thủ công,
                     // bỏ mốc Check-out tương lai để ca có thể tiếp tục và Check-out lại.
                     if (_environment.IsDevelopment() &&
-                        nhatKy.ThoiGianCheckOut.Value >= thoiGianDemo)
+                        nhatKy.ThoiGianCheckOut.Value > thoiGianDemo)
                     {
                         nhatKy.ThoiGianCheckOut = null;
                         nhatKy.DaTatDien = null;
