@@ -524,8 +524,15 @@ function TeacherView(S) {
     if (!phongHopLeFG(l.maPhong, f.phongMoi) || xungDot(l, f.phongMoi)) { notify("Phòng mới không hợp lệ hoặc bị trùng lịch.", "error"); return; }
     try {
       await apiFetch("/api/YeuCauDoiPhong", { method: "POST", body: JSON.stringify({ lichDayId: Number(l.id), phongMoi: f.phongMoi, lyDo: f.lyDo.trim() }) }, S.token);
-      const res = await apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token).catch(() => null);
-      if (res) setDsYeuCau(unwrapData(res).map(x => ({ id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, maLich:l.maLich, lichDayId:x.lichDayId, monHoc:l.monHoc, gv:x.tenGiangVien || gv, phongCu:x.phongCu, phongMoi:x.phongMoi, lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao })));
+      const res = await apiFetch("/api/YeuCauDoiPhong", {}, S.token);
+      const schedulesRes = await apiFetch("/api/LichDay", {}, S.token);
+      const schedules = unwrapData(schedulesRes).map(mapLichFromApi);
+      setDsYeuCau(unwrapData(res).map(x => {
+        const schedule = schedules.find(item => String(item.id) === String(x.lichDayId));
+        return { id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, maLich:schedule?.maLich || String(x.lichDayId),
+          lichDayId:x.lichDayId, monHoc:x.monHoc || schedule?.monHoc || "", gv:x.tenGiangVien || gv,
+          phongCu:x.phongCu, phongMoi:x.phongMoi, lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao };
+      }));
       setF({ maLich: "", phongMoi: "", lyDo: "" });
       notify("Đã lưu yêu cầu đổi phòng vào database.", "ok");
     } catch (e) { notify(e.message, "error"); }
@@ -544,8 +551,18 @@ function TeacherView(S) {
       }, S.token);
 
       // Tai lai lich tu SQL Server de giao dien khong chi cap nhat tam tren local state.
-      const schedulesRes = await apiFetch("/api/LichDay", {}, S.token);
-      setDsLich(unwrapData(schedulesRes).map(mapLichFromApi));
+      const [schedulesRes, requestsRes] = await Promise.all([
+        apiFetch("/api/LichDay", {}, S.token),
+        apiFetch("/api/YeuCauDoiPhong", {}, S.token)
+      ]);
+      const refreshedSchedules = unwrapData(schedulesRes).map(mapLichFromApi);
+      setDsLich(refreshedSchedules);
+      setDsYeuCau(unwrapData(requestsRes).map(x => {
+        const schedule = refreshedSchedules.find(item => String(item.id) === String(x.lichDayId));
+        return { id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, maLich:schedule?.maLich || String(x.lichDayId),
+          lichDayId:x.lichDayId, monHoc:x.monHoc || schedule?.monHoc || "", gv:x.tenGiangVien || gv,
+          phongCu:x.phongCu, phongMoi:x.phongMoi, lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao };
+      }));
       setF({ maLich: "", phongMoi: "", lyDo: "" });
       notify(response?.message || `Đã đổi phòng ${l.maPhong} → ${f.phongMoi} và lưu hậu kiểm.`, "ok");
     } catch (e) { notify(e.message, "error"); }
@@ -2027,6 +2044,16 @@ function App() {
       setDsTicket([]);
 
       if (role === "GV") {
+        const [ownRequestsRes] = await Promise.all([
+          apiFetch("/api/YeuCauDoiPhong", {}, activeToken)
+        ]);
+        setDsYeuCau(unwrapData(ownRequestsRes).map(x => {
+          const schedule = schedules.find(item => String(item.id) === String(x.lichDayId));
+          return { id:x.id, maYeuCau:x.maYeuCau || `YC${x.id}`, lichDayId:x.lichDayId,
+            maLich:schedule?.maLich || String(x.lichDayId), monHoc:x.monHoc || schedule?.monHoc || "",
+            gv:x.tenGiangVien || currentUser?.hoTen || "", phongCu:x.phongCu, phongMoi:x.phongMoi,
+            lyDo:x.lyDo, loai:x.loai, trangThai:x.trangThai, thoiGian:x.thoiGianTao };
+        }));
         const activeSchedules = schedules.filter(x => x.trangThai === "Đang diễn ra" && x.id != null);
         const tempResults = await Promise.all(activeSchedules.map(x =>
           apiFetch(`/api/GhiNhanTam/theo-lich/${x.id}`, {}, activeToken).catch(() => ({ data: [] }))
