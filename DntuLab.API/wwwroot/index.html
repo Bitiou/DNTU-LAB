@@ -1826,7 +1826,7 @@ function ManagerView(S) {
 
 
 /* ---------- Ket noi DntuLab.API ---------- */
-const API_BASE = ""; // Frontend duoc phuc vu cung host voi ASP.NET Core.
+const API_BASE = "https://dntulab-api.onrender.com";
 const apiFetch = async (path, options = {}, token = localStorage.getItem("dntulab_access_token")) => {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
