@@ -1193,7 +1193,7 @@ function ManagerView(S) {
 
   const taiMauExcel = async () => {
     try {
-      const response = await fetch("/api/ImportLichExcel/mau", {
+      const response = await fetch(`${API_BASE}/api/ImportLichExcel/mau`, {
         headers: { Authorization: `Bearer ${S.token}` }
       });
       if (!response.ok) {
@@ -1229,7 +1229,7 @@ function ManagerView(S) {
       form.append("file", excelFile);
 
       // Không tự đặt Content-Type: browser phải tự thêm multipart boundary.
-      const response = await fetch("/api/ImportLichExcel", {
+      const response = await fetch(`${API_BASE}/api/ImportLichExcel`, {
         method: "POST",
         headers: { Authorization: `Bearer ${S.token}` },
         body: form
@@ -1263,7 +1263,7 @@ function ManagerView(S) {
 
   const xuatBaoCao = async (dinhDang) => {
     try {
-      const response = await fetch(`/api/reports/hieu-suat/${dinhDang}`, {
+      const response = await fetch(`${API_BASE}/api/reports/hieu-suat/${dinhDang}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${S.token}` }
       });
@@ -1362,9 +1362,10 @@ function ManagerView(S) {
         apiFetch("/api/LichDay", {}, S.token),
         apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token)
       ]);
-      setDsLich(unwrapData(scheduleResponse).map(mapLichFromApi));
+      const refreshedSchedules = unwrapData(scheduleResponse).map(mapLichFromApi);
+      setDsLich(refreshedSchedules);
       setDsYeuCau(unwrapData(requestResponse).map((x) => {
-        const related = dsLich.find((l) => String(l.id) === String(x.lichDayId));
+        const related = refreshedSchedules.find((l) => String(l.id) === String(x.lichDayId));
         return {
           id: x.id, maYeuCau: x.maYeuCau || `YC${x.id}`,
           lichDayId: x.lichDayId, maLich: related?.maLich || String(x.lichDayId),
@@ -1375,6 +1376,26 @@ function ManagerView(S) {
       }));
       notify(`Đã phê duyệt ${r.maYeuCau} và cập nhật phòng trong database.`, "ok");
     } catch (error) {
+      // API có thể tự đóng yêu cầu cũ nếu phòng nguồn không còn khớp.
+      // Tải lại danh sách để trạng thái Chờ duyệt không bị treo trên giao diện.
+      try {
+        const [scheduleResponse, requestResponse] = await Promise.all([
+          apiFetch("/api/LichDay", {}, S.token),
+          apiFetch("/api/QuanLyYeuCauDoiPhong", {}, S.token)
+        ]);
+        const refreshedSchedules = unwrapData(scheduleResponse).map(mapLichFromApi);
+        setDsLich(refreshedSchedules);
+        setDsYeuCau(unwrapData(requestResponse).map((x) => {
+          const related = refreshedSchedules.find((l) => String(l.id) === String(x.lichDayId));
+          return {
+            id: x.id, maYeuCau: x.maYeuCau || `YC${x.id}`,
+            lichDayId: x.lichDayId, maLich: related?.maLich || String(x.lichDayId),
+            monHoc: related?.monHoc || "", gv: x.tenGiangVien || "Chưa cập nhật",
+            phongCu: x.phongCu, phongMoi: x.phongMoi, lyDo: x.lyDo,
+            loai: x.loai, trangThai: x.trangThai, thoiGian: x.thoiGianTao
+          };
+        }));
+      } catch { /* Giữ thông báo lỗi API gốc nếu tải lại thất bại. */ }
       notify(error.message, "error");
     }
   };

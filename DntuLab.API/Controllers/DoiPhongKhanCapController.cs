@@ -187,9 +187,6 @@ public class DoiPhongKhanCapController : ControllerBase
                 });
             }
 
-            // Cập nhật lịch, tạo yêu cầu hậu kiểm và thông báo trong cùng transaction.
-            lich.MaPhong = phongMoi;
-
             var lyDo = (request.LyDo ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(lyDo))
             {
@@ -198,6 +195,26 @@ public class DoiPhongKhanCapController : ControllerBase
                     success = false,
                     message = "Vui lòng nhập lý do đổi phòng."
                 });
+            }
+
+            // Cập nhật lịch, đồng thời đóng các yêu cầu có kế hoạch đang chờ
+            // duyệt cho cùng ca. Sau UC05, phòng nguồn của các yêu cầu cũ
+            // không còn đúng nên không được để chúng treo hoặc duyệt nhầm.
+            lich.MaPhong = phongMoi;
+
+            var yeuCauKeHoachChoDuyet = await _context.YeuCaus
+                .Where(x =>
+                    x.LichDayId == lich.Id &&
+                    x.Loai == LoaiYeuCau.CoKeHoach &&
+                    x.TrangThai == TrangThaiYeuCau.ChoDuyet)
+                .ToListAsync();
+
+            foreach (var yeuCauCu in yeuCauKeHoachChoDuyet)
+            {
+                yeuCauCu.TrangThai = TrangThaiYeuCau.TuChoi;
+                yeuCauCu.ThoiGianDuyet = hienTai;
+                yeuCauCu.GhiChuDuyet =
+                    $"Tự đóng do đổi phòng khẩn cấp UC05: lịch đã chuyển từ {phongCu} sang {phongMoi}.";
             }
 
             var yeuCau = new YeuCauDoiPhong

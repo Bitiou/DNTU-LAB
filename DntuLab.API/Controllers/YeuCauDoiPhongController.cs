@@ -38,15 +38,15 @@ public class YeuCauDoiPhongController : ControllerBase
 
         var data = await _context.YeuCaus
             .AsNoTracking()
-            .Where(x => x.GiangVienId == giangVienId)
+            .Where(x => x.GiangVienId == giangVienId || x.LichDay.GiangVienId == giangVienId)
             .OrderByDescending(x => x.ThoiGianTao)
             .Select(x => new
             {
                 x.Id,
                 x.MaYeuCau,
                 x.LichDayId,
-                x.GiangVienId,
-                TenGiangVien = x.GiangVien.HoTen,
+                GiangVienId = x.LichDay.GiangVienId,
+                TenGiangVien = x.LichDay.GiangVien.HoTen,
                 MonHoc = x.LichDay.MonHoc,
                 Ngay = x.LichDay.Ngay,
                 Ca = x.LichDay.Ca,
@@ -146,34 +146,62 @@ public class YeuCauDoiPhongController : ControllerBase
             });
         }
 
-        var yeuCauTonTai = await _context.YeuCaus
-            .AsNoTracking()
+        // Những yêu cầu còn Chờ duyệt nhưng phòng nguồn không còn khớp
+        // với lịch hiện tại đã trở thành yêu cầu cũ (ví dụ lịch đã được
+        // đổi bằng UC05). Đóng chúng để không khóa ca học vô thời hạn.
+        var yeuCauDangHoatDong = await _context.YeuCaus
             .Where(x =>
                 x.LichDayId == lich.Id &&
-                (x.TrangThai == "Chờ duyệt" ||
-                 x.TrangThai == "Đã duyệt" ||
-                 x.TrangThai == "Tự động duyệt"))
+                (x.TrangThai == TrangThaiYeuCau.ChoDuyet ||
+                 x.TrangThai == TrangThaiYeuCau.DaDuyet ||
+                 x.TrangThai == TrangThaiYeuCau.TuDongDuyet))
             .OrderByDescending(x => x.ThoiGianTao)
-            .Select(x => new
-            {
-                x.Id,
-                x.Loai,
-                x.TrangThai,
-                x.PhongCu,
-                x.PhongMoi,
-                x.GiangVienId
-            })
-            .FirstOrDefaultAsync();
+            .ToListAsync();
+
+        var yeuCauCu = yeuCauDangHoatDong
+            .Where(x => x.PhongCu != lich.MaPhong &&
+                        x.TrangThai == TrangThaiYeuCau.ChoDuyet)
+            .ToList();
+
+        foreach (var oldRequest in yeuCauCu)
+        {
+            oldRequest.TrangThai = TrangThaiYeuCau.TuChoi;
+            oldRequest.ThoiGianDuyet = hienTai;
+            oldRequest.GhiChuDuyet =
+                $"Tự đóng: phòng của lịch đã thay đổi từ {oldRequest.PhongCu} sang {lich.MaPhong} trước khi duyệt.";
+        }
+
+        var yeuCauTonTai = yeuCauDangHoatDong
+            .FirstOrDefault(x =>
+                x.TrangThai == TrangThaiYeuCau.DaDuyet ||
+                x.TrangThai == TrangThaiYeuCau.TuDongDuyet ||
+                (x.TrangThai == TrangThaiYeuCau.ChoDuyet &&
+                 x.PhongCu == lich.MaPhong));
 
         if (yeuCauTonTai != null)
         {
+            if (yeuCauCu.Count > 0)
+                await _context.SaveChangesAsync();
+
             return Conflict(new
             {
                 success = false,
-                message = $"Ca học đã có yêu cầu {yeuCauTonTai.Loai} {yeuCauTonTai.Id} ở trạng thái '{yeuCauTonTai.TrangThai}' ({yeuCauTonTai.PhongCu} → {yeuCauTonTai.PhongMoi}). Không thể tạo yêu cầu trùng cho cùng ca học.",
-                yeuCauTonTai
+                message = $"Ca học đã có yêu cầu {yeuCauTonTai.Loai} {yeuCauTonTai.MaYeuCau} ở trạng thái '{yeuCauTonTai.TrangThai}' ({yeuCauTonTai.PhongCu} → {yeuCauTonTai.PhongMoi}).",
+                yeuCauTonTai = new
+                {
+                    yeuCauTonTai.Id,
+                    yeuCauTonTai.MaYeuCau,
+                    yeuCauTonTai.Loai,
+                    yeuCauTonTai.TrangThai,
+                    yeuCauTonTai.PhongCu,
+                    yeuCauTonTai.PhongMoi
+                },
+                daDongYeuCauCu = yeuCauCu.Count
             });
         }
+
+        if (yeuCauCu.Count > 0)
+            await _context.SaveChangesAsync();
 
         var yeuCau = new YeuCauDoiPhong
         {

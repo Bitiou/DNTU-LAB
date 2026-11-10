@@ -131,10 +131,24 @@ public class QuanLyYeuCauDoiPhongController : ControllerBase
 
             if (lich.MaPhong != yeuCau.PhongCu)
             {
+                // Không để yêu cầu cũ tiếp tục nằm ở trạng thái Chờ duyệt
+                // sau khi lịch đã được chuyển phòng bởi UC05/yêu cầu khác.
+                yeuCau.TrangThai = TrangThaiYeuCau.TuChoi;
+                yeuCau.NguoiDuyetId = nguoiDuyetId;
+                yeuCau.ThoiGianDuyet = DateTime.UtcNow;
+                yeuCau.GhiChuDuyet =
+                    $"Tự đóng do phòng lịch đã đổi: yêu cầu ghi nhận {yeuCau.PhongCu}, phòng hiện tại {lich.MaPhong}.";
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
                 return Conflict(new
                 {
                     success = false,
-                    message = "Phòng hiện tại đã thay đổi. Cần kiểm tra lại yêu cầu."
+                    message = "Yêu cầu đã cũ và được tự đóng vì phòng của lịch đã thay đổi.",
+                    phongTrongYeuCau = yeuCau.PhongCu,
+                    phongHienTai = lich.MaPhong,
+                    trangThai = yeuCau.TrangThai
                 });
             }
 
