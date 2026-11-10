@@ -5,6 +5,7 @@ using System.Globalization;
 using DntuLab.Api.Data;
 using DntuLab.Api.DTOs;
 using DntuLab.Api.Domain;
+using DntuLab.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,43 +28,11 @@ public class DoiPhongKhanCapController : ControllerBase
         _environment = environment;
     }
 
-    private DateTime GetVietnamNow()
-    {
-        TimeZoneInfo vietnamTimeZone;
-        try
-        {
-            // Windows
-            vietnamTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            // Linux / container
-            vietnamTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Ho_Chi_Minh");
-        }
-
-        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vietnamTimeZone);
-
-        // Dong ho demo chi duoc phep ghi de trong Development.
-        // Production bo qua header de khong the gia mao gio he thong.
-        if (_environment.IsDevelopment())
-        {
-            var dateText = Request.Headers["X-Debug-Date"].ToString();
-            var timeText = Request.Headers["X-Debug-Time"].ToString();
-            var date = DateOnly.FromDateTime(now);
-            var time = TimeOnly.FromDateTime(now);
-            if (DateOnly.TryParseExact(dateText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate)) date = parsedDate;
-            if (TimeOnly.TryParse(timeText, out var parsedTime)) time = parsedTime;
-            return date.ToDateTime(time);
-        }
-
-        return now;
-    }
-
     [HttpPost]
     public async Task<IActionResult> DoiPhong(
         [FromBody] DoiPhongKhanCapRequest request)
     {
-        var hienTai = GetVietnamNow();
+        var hienTai = DemoClock.GetNow(Request, _environment);
 
         if (hienTai.TimeOfDay >= new TimeSpan(8, 0, 0))
         {
@@ -108,12 +77,37 @@ public class DoiPhongKhanCapController : ControllerBase
             if (lich.GiangVienId != giangVienId)
                 return Forbid();
 
-            if (lich.TrangThai != "Đang diễn ra")
+            if (lich.Ngay != DateOnly.FromDateTime(hienTai))
             {
                 return Conflict(new
                 {
                     success = false,
-                    message = "Chỉ được đổi phòng cho ca đang diễn ra."
+                    message = "Ca học không thuộc ngày Demo đang chọn."
+                });
+            }
+
+            // Nhật ký Check-in là nguồn xác thực nghiệp vụ; không chỉ dựa vào
+            // TrangThai có thể chưa đồng bộ khi đồng hồ Demo vừa được tua.
+            var nhatKy = await _context.NhatKys
+                .FirstOrDefaultAsync(x => x.LichDayId == lich.Id);
+
+            if (nhatKy == null || nhatKy.ThoiGianCheckIn > hienTai ||
+                (nhatKy.ThoiGianCheckOut.HasValue && nhatKy.ThoiGianCheckOut.Value <= hienTai))
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Ca học phải Check-in và chưa Check-out tại thời điểm Demo hiện tại."
+                });
+            }
+
+            if (hienTai < lich.Ngay.ToDateTime(lich.BatDau).AddMinutes(-30) ||
+                hienTai >= lich.Ngay.ToDateTime(lich.KetThuc).AddMinutes(30))
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Ca học không còn trong khoảng thời gian được phép đổi phòng khẩn cấp."
                 });
             }
 
