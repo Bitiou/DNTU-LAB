@@ -1048,10 +1048,16 @@ function TeacherView(S) {
 
 /* ---------- Kỹ thuật viên ---------- */
 
-function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, dsPhong, dsLich, systemTime, notify, token }) {
+function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, dsPhong, dsLich, systemDate, systemTime, notify, token }) {
   const [loaiLoc, setLoaiLoc] = useState("PC");
-  // Dùng cùng điều kiện xác định phòng đang sử dụng như giao diện Giảng viên.
-  const dangBan = (maPhong) => dsLich.some((l) => l.maPhong === maPhong && l.trangThai !== "Đã kết thúc" && toMin(l.batDau) <= toMin(systemTime) && toMin(systemTime) < toMin(l.ketThuc));
+  // Ngày trên thanh Demo ở định dạng yyyy-MM-dd; lịch trong giao diện là dd/MM/yyyy.
+  const selectedUiDate = (() => { const [y, m, d] = String(systemDate || "").split("-"); return y && m && d ? `${d}/${m}/${y}` : ""; })();
+  // Chỉ tính phòng bận nếu có lịch đúng ngày Demo, đúng khung giờ và chưa bị hủy/kết thúc.
+  const dangBan = (maPhong) => dsLich.some((l) =>
+    l.maPhong === maPhong && l.ngay === selectedUiDate &&
+    !["Đã kết thúc", "Đã hủy"].includes(l.trangThai) &&
+    toMin(l.batDau) <= toMin(systemTime) && toMin(systemTime) < toMin(l.ketThuc)
+  );
   const capNhatTrangThaiThietBi = async (device, trangThai) => {
     try {
       await apiFetch(`/api/ThietBi/${encodeURIComponent(device.maThietBi)}/trang-thai`, {
@@ -2075,7 +2081,14 @@ function App() {
         apiFetch("/api/LichDay", {}, activeToken),
         apiFetch("/api/NhatKy", {}, activeToken)
       ]);
-      const rooms = unwrapData(roomsRes).map(x => ({ maPhong: x.maPhong, loaiPhong: x.loaiPhong, sucChua: Number(x.sucChua) || (String(x.maPhong || "").startsWith("F") ? 50 : String(x.maPhong || "").startsWith("G") ? 60 : x.maPhong === "AIBOT" ? 80 : 0), cum: x.cum }));
+      const rooms = unwrapData(roomsRes).map(x => {
+        const maPhong = String(x.maPhong || "").trim().toUpperCase();
+        const loaiApi = String(x.loaiPhong || "").trim();
+        const loaiPhong = ["PC", "BYOD", "Lab AI"].includes(loaiApi)
+          ? loaiApi
+          : maPhong.startsWith("F") ? "PC" : maPhong.startsWith("G") ? "BYOD" : maPhong === "AIBOT" ? "Lab AI" : loaiApi;
+        return { maPhong, loaiPhong, sucChua: Number(x.sucChua) || (maPhong.startsWith("F") ? 50 : maPhong.startsWith("G") ? 60 : maPhong === "AIBOT" ? 80 : 0), cum: x.cum };
+      });
       const apiDevices = unwrapData(devicesRes).map(x => ({ maThietBi: x.maThietBi, maPhong: x.maPhong, loai: x.loai, ten: x.ten, trangThai: x.trangThai }));
       // Danh sách thiết bị là dữ liệu thực từ database; không tự sinh thiết bị giả trên frontend.
       const devices = apiDevices;
