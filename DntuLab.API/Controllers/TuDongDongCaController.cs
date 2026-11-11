@@ -78,6 +78,12 @@ public class TuDongDongCaController : ControllerBase
 
                 foreach (var lesson in schedules)
                 {
+                    // Chỉ đồng bộ ca thuộc ngày Demo đang chọn.
+                    // Không được tua ngược/xóa nhật ký của ngày khác khi người dùng
+                    // chuyển ngày; nhật ký Check-in thủ công phải tồn tại khi quay lại.
+                    if (lesson.Ngay != DateOnly.FromDateTime(now))
+                        continue;
+
                     var startAt = lesson.Ngay.ToDateTime(lesson.BatDau);
                     var endAt = lesson.Ngay.ToDateTime(lesson.KetThuc);
                     // Cửa sổ Check-in thủ công: [BatDau - 30 phút, BatDau + 30 phút).
@@ -89,9 +95,8 @@ public class TuDongDongCaController : ControllerBase
 
                     if (log != null)
                     {
-                        // Demo timeline co the tua lui/tiến tren ca Development va Production.
-                        // Tai dung timestamp Check-in thi giu lai nhat ky; chi tua ve truoc
-                        // timestamp moi hoan tac su kien Check-in.
+                        // Chỉ hoàn tác khi tua ngược trong chính ngày của ca học.
+                        // Việc chuyển sang ngày khác không làm mất nhật ký này.
                         if (now < log.ThoiGianCheckIn)
                         {
                             _context.NhatKys.Remove(log);

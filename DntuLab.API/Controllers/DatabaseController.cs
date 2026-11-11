@@ -51,31 +51,9 @@ public class DatabaseController : ControllerBase
             var realToday = DateOnly.FromDateTime(realNow);
             var realTime = TimeOnly.FromDateTime(realNow);
 
-            // Lich co dinh theo bo seed PostgreSQL hien tai: 20/10/2026 - 30/11/2026.
-            // Lich import tu Excel bat dau tu 01/12/2026 tro di se duoc xoa khi Reset.
-            var importScheduleStart = new DateOnly(2026, 12, 1);
-            var importedScheduleIds = await _context.LichDays
-                .Where(x => x.Ngay >= importScheduleStart)
-                .Select(x => x.Id)
-                .ToListAsync();
-
-            var importedScheduleIdSet = importedScheduleIds.ToHashSet();
-            var importedLogs = await _context.NhatKys
-                .Where(x => importedScheduleIdSet.Contains(x.LichDayId))
-                .ToListAsync();
-            var importedTemporaryNotes = await _context.GhiNhanTams
-                .Where(x => importedScheduleIdSet.Contains(x.LichDayId))
-                .ToListAsync();
-
-            // Reset Demo phai xoa TOAN BO ghi nhan su co tam cu,
-            // khong chi cac ghi nhan thuoc lich import tu thang 02/2027.
-            // Neu chi xoa theo importedScheduleIds, cac ghi nhan cu nhu L081
-            // van con va tiep tuc hien thi sau khi reset.
+            // Reset Demo khong duoc xoa lich giang day/import hoac nhat ky cua
+            // cac ngay khac. Chi xoa ghi nhan tam de khoi phuc bo demo sach.
             var allTemporaryNotes = await _context.GhiNhanTams.ToListAsync();
-
-            var importedSchedules = await _context.LichDays
-                .Where(x => importedScheduleIdSet.Contains(x.Id))
-                .ToListAsync();
 
             // Reset UC11-12: xoa toan bo yeu cau doi phong cu va thong bao lien quan,
             // sau do se tao lai bo yeu cau demo co dinh. Truoc khi xoa, khoi phuc phong
@@ -98,19 +76,17 @@ public class DatabaseController : ControllerBase
             }
 
             var allRequestIds = allRoomRequests.Select(x => x.Id).ToList();
-            var oldRoomNotifications = await _context.ThongBaos
-                .Where(x => x.YeuCauId.HasValue && allRequestIds.Contains(x.YeuCauId.Value))
-                .ToListAsync();
+            // Reset toàn bộ thông báo Demo cũ; thông báo hậu kiểm sẽ được tạo lại
+            // tương ứng với các yêu cầu khẩn cấp mới bên dưới.
+            var oldRoomNotifications = await _context.ThongBaos.ToListAsync();
 
-            // Xoa FK con truoc: ThongBao -> YeuCauDoiPhong -> LichDay.
+            // Xóa FK con trước: ThongBao -> YeuCauDoiPhong.
             _context.ThongBaos.RemoveRange(oldRoomNotifications);
             _context.YeuCaus.RemoveRange(allRoomRequests);
-            _context.NhatKys.RemoveRange(importedLogs);
             _context.GhiNhanTams.RemoveRange(allTemporaryNotes);
-            _context.LichDays.RemoveRange(importedSchedules);
 
             if (oldRoomNotifications.Count > 0 || allRoomRequests.Count > 0 ||
-                importedSchedules.Count > 0 || importedLogs.Count > 0 || allTemporaryNotes.Count > 0)
+                allTemporaryNotes.Count > 0)
                 await _context.SaveChangesAsync();
 
             var allLogsForReset = await _context.NhatKys
@@ -149,14 +125,10 @@ public class DatabaseController : ControllerBase
                 .Where(p => p.Cum == CumPhong.F || p.Cum == CumPhong.G)
                 .OrderBy(p => p.MaPhong)
                 .ToListAsync();
-            // Chon lich co dinh trong khoang seed thuc te (20/10 - 30/11/2026).
-            // Chi tao mau tren cac ca chua dien ra theo gio thuc Viet Nam.
-            var fixedScheduleFrom = new DateOnly(2026, 10, 20);
-            var fixedScheduleThrough = new DateOnly(2026, 11, 30);
+            // Tao du lieu mau tren cac ca F/G chua dien ra, khong gioi han
+            // cung ngay seed co dinh de Reset van hoat dong khi lich duoc cap nhat.
             var demoLessons = await _context.LichDays
-                .Where(l => l.Ngay >= fixedScheduleFrom &&
-                            l.Ngay <= fixedScheduleThrough &&
-                            (l.MaPhong.StartsWith("F") || l.MaPhong.StartsWith("G")) &&
+                .Where(l => (l.MaPhong.StartsWith("F") || l.MaPhong.StartsWith("G")) &&
                             (l.Ngay > realToday ||
                              (l.Ngay == realToday && l.BatDau > realTime)))
                 .OrderBy(l => l.Ngay).ThenBy(l => l.BatDau).ToListAsync();
@@ -337,17 +309,10 @@ public class DatabaseController : ControllerBase
                 message = $"Da reset demo: khoi phuc {devices.Count} thiet bi va tao {seeded} Ticket tu danh muc thiet bi thuc te.",
                 ticketCount = seeded,
                 futureAttendanceReset = logsToReset.Count,
-                futureSchedulesReset = futureSchedules.Count,
-                importedSchedulesDeleted = importedSchedules.Count,
-                importedAttendanceDeleted = importedLogs.Count,
-                importedRoomRequestsDeleted = allRoomRequests.Count(x => importedScheduleIdSet.Contains(x.LichDayId)),
                 roomChangeRequestsSeeded = seededRoomRequests,
                 auditNotificationsSeeded = seededAuditNotifications,
                 oldRoomNotificationsDeleted = oldRoomNotifications.Count,
-                importedTemporaryNotesDeleted = importedTemporaryNotes.Count,
                 totalTemporaryNotesDeleted = allTemporaryNotes.Count,
-                fixedScheduleFrom = fixedScheduleFrom.ToString("dd/MM/yyyy"),
-                fixedScheduleThrough = fixedScheduleThrough.ToString("dd/MM/yyyy"),
                 currentVietnamDate = realNow.ToString("yyyy-MM-dd"),
                 currentVietnamTime = realNow.ToString("HH:mm"),
                 currentVietnamDateTime = realNowOffset.ToString("yyyy-MM-dd'T'HH:mm:sszzz"),
