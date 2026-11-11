@@ -1,4 +1,4 @@
-
+﻿
 namespace DntuLab.Api.DTOs;
 
 public class LocTicketRequest
