@@ -2150,7 +2150,9 @@ function App() {
       }
     } catch (e) {
       setDataError(`Không tải được đầy đủ dữ liệu từ API: ${e.message}`);
+      return false;
     } finally { setDataBusy(false); }
+    return true;
   };
 
   const doLogin = async (e) => {
@@ -2182,14 +2184,30 @@ function App() {
     let cancelled = false;
     const syncPastLessons = async () => {
       try {
-        // Dùng chung ngày/giờ Demo cho toàn bộ giảng viên.
-        await apiFetch("/api/LichDay/tu-dong-checkin-checkout", {
+        // Đánh thức Backend và xác nhận token bằng các API đọc dữ liệu trước.
+        // Tránh gọi endpoint đồng bộ ngay lúc trang vừa khôi phục phiên đăng nhập.
+        const loaded = await loadApiData(token, currentUser.vaiTro);
+        if (!loaded || cancelled) return;
+
+        const request = {
           method: "POST",
           headers: { "X-Debug-Date": systemDate, "X-Debug-Time": systemTime }
-        }, token);
+        };
+
+        // Một lần retry ngắn cho trường hợp Backend vừa khởi động/redeploy.
+        // Không retry liên tục và không che lỗi xác thực nếu 401 vẫn còn.
+        try {
+          await apiFetch("/api/LichDay/tu-dong-checkin-checkout", request, token);
+        } catch (firstError) {
+          if (cancelled || !String(firstError.message || "").includes("401")) throw firstError;
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (cancelled) return;
+          await apiFetch("/api/LichDay/tu-dong-checkin-checkout", request, token);
+        }
+
         if (!cancelled) await loadApiData(token, currentUser.vaiTro);
       } catch (e) {
-        if (!cancelled) setDataError(`Không thể tự động hoàn tất ca học quá hạn: ${e.message}`);
+        if (!cancelled) setDataError(`Không thể đồng bộ trạng thái ca học: ${e.message}`);
       }
     };
 
