@@ -1048,7 +1048,10 @@ function TeacherView(S) {
 
 /* ---------- Kỹ thuật viên ---------- */
 
-function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, notify, token }) {
+function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, dsPhong, dsLich, systemTime, notify, token }) {
+  const [loaiLoc, setLoaiLoc] = useState("PC");
+  // Dùng cùng điều kiện xác định phòng đang sử dụng như giao diện Giảng viên.
+  const dangBan = (maPhong) => dsLich.some((l) => l.maPhong === maPhong && l.trangThai !== "Đã kết thúc" && toMin(l.batDau) <= toMin(systemTime) && toMin(systemTime) < toMin(l.ketThuc));
   const capNhatTrangThaiThietBi = async (device, trangThai) => {
     try {
       await apiFetch(`/api/ThietBi/${encodeURIComponent(device.maThietBi)}/trang-thai`, {
@@ -1147,6 +1150,35 @@ function TechView({ dsTicket, setDsTicket, dsThietBi, setDsThietBi, systemTime, 
           })}
         </div>
       </Card>
+      <Card title="Tra cứu phòng trống theo loại phòng (UC01)" icon="magnifying-glass">
+        <div className="flex gap-2 mb-3">
+          {["PC", "BYOD", "Lab AI"].map((t) => (
+            <button
+              key={t}
+              onClick={() => setLoaiLoc(t)}
+              className={`px-3 py-1.5 rounded-full text-sm border ${loaiLoc === t ? "bg-stone-800 text-white border-stone-800" : "bg-white border-stone-300"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="grid sm:grid-cols-3 gap-3">
+          {dsPhong.filter((p) => p.loaiPhong === loaiLoc).map((p) => {
+            const ban = dangBan(p.maPhong);
+            const sucChuaHienThi = Number(p.sucChua) || 0;
+            return (
+              <div key={p.maPhong} className="border border-stone-200 rounded-md p-3">
+                <div className="flex justify-between items-center">
+                  <b>{p.maPhong}</b>
+                  <Badge text={ban ? "Đang sử dụng" : "Trống"} tone={ban ? "red" : "green"} />
+                </div>
+                <div className="text-sm text-stone-600 mt-1">Sức chứa {sucChuaHienThi} · Lúc {systemTime}</div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
       <Card title="Danh mục toàn bộ thiết bị các phòng LAB" icon="table-cells">
         <p className="text-sm text-stone-600 mb-3">KTV chỉ được nhấn thiết bị màu đỏ (Hỏng) hoặc màu vàng (Đang bảo trì): Đỏ → Vàng (tiếp nhận xử lý) → Xanh (xác nhận khắc phục). Thiết bị màu xanh bị khóa thao tác. Mỗi lần cập nhật, hệ thống tự tạo/cập nhật/đóng Ticket tương ứng. Giảng viên và kỹ thuật viên cùng nhìn thấy 6 bộ KIT tại AIBOT.</p>
         <Legend />
